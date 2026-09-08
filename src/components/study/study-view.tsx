@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   X,
   Eye,
@@ -12,6 +12,8 @@ import {
   ArrowLeft,
   Check,
   Volume2,
+  ArrowRight,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useDeck, useStudyCards, useReviewCard } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -33,13 +35,20 @@ import {
   gradeToRating,
   containsCJK,
 } from "@/lib/similarity";
-import { parseCloze, splitExamples } from "@/lib/ruby";
+import { parseCloze, pickRandomExample, fieldValueToAnnotated } from "@/lib/ruby";
 import { speak, isTtsSupported } from "@/lib/tts";
-import { getLanguageBcp47 } from "@/lib/constants";
-import type { CardData, BlueprintFieldDef, Rating, SessionResult } from "@/lib/types";
+import { getLanguageBcp47, getLanguageFlag } from "@/lib/constants";
+import type {
+  CardData,
+  BlueprintFieldDef,
+  Rating,
+  SessionResult,
+  CardFields,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Phase = "setup" | "studying" | "complete";
+type Direction = "targetToSource" | "sourceToTarget";
 
 export function StudyView({ deckId }: { deckId: string }) {
   const { data: deck, isLoading } = useDeck(deckId);
@@ -48,6 +57,7 @@ export function StudyView({ deckId }: { deckId: string }) {
   const { toast } = useToast();
 
   const [mode, setMode] = useState<"learn" | "freestyle">("learn");
+  const [direction, setDirection] = useState<Direction>("targetToSource");
   const [interaction, setInteraction] = useState<
     "passive" | "typing" | "multiple" | "cloze"
   >("passive");
@@ -56,10 +66,12 @@ export function StudyView({ deckId }: { deckId: string }) {
   const [pool, setPool] = useState<"all" | "seen" | "unseen">("all");
   const [phase, setPhase] = useState<Phase>("setup");
 
-  const { data: studyData, isLoading: cardsLoading } = useStudyCards(
-    deckId,
-    { mode, pool: mode === "freestyle" ? pool : undefined, randomise, limit: batchSize }
-  );
+  const { data: studyData, isLoading: cardsLoading } = useStudyCards(deckId, {
+    mode,
+    pool: mode === "freestyle" ? pool : undefined,
+    randomise,
+    limit: batchSize,
+  });
 
   const [queue, setQueue] = useState<CardData[]>([]);
   const [index, setIndex] = useState(0);
@@ -98,7 +110,6 @@ export function StudyView({ deckId }: { deckId: string }) {
 
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-3xl mx-auto">
-      {/* Back */}
       <button
         onClick={() => setView({ name: "deck", deckId })}
         className="flex items-center gap-1.5 text-sm text-secondary hover:text-[var(--text-primary)] mb-4 transition-colors"
@@ -110,8 +121,12 @@ export function StudyView({ deckId }: { deckId: string }) {
         <StudySetup
           deckName={deck.name}
           targetLanguage={deck.targetLanguage}
+          sourceLanguage={deck.sourceLanguage}
+          fields={deck.fields}
           mode={mode}
           setMode={setMode}
+          direction={direction}
+          setDirection={setDirection}
           interaction={interaction}
           setInteraction={setInteraction}
           batchSize={batchSize}
@@ -134,16 +149,18 @@ export function StudyView({ deckId }: { deckId: string }) {
           index={index}
           setIndex={setIndex}
           interaction={interaction}
+          direction={direction}
           fields={deck.fields}
           targetLanguage={deck.targetLanguage}
           sourceLanguage={deck.sourceLanguage}
+          contextLanguage={deck.contextLanguage}
           strictAccents={deck.strictAccents}
           strictMode={deck.strictMode}
-          cardDirection={deck.cardDirection}
           onComplete={onComplete}
           onExit={() => setPhase("setup")}
           ttsEnabled={settings.ttsEnabled}
           ttsRate={settings.ttsRate}
+          mode={mode}
         />
       )}
 
@@ -159,9 +176,13 @@ export function StudyView({ deckId }: { deckId: string }) {
 function StudySetup(props: {
   deckName: string;
   targetLanguage: string;
+  sourceLanguage: string;
+  fields: BlueprintFieldDef[];
   mode: "learn" | "freestyle";
   setMode: (m: "learn" | "freestyle") => void;
-  interaction: string;
+  direction: Direction;
+  setDirection: (d: Direction) => void;
+  interaction: "passive" | "typing" | "multiple" | "cloze";
   setInteraction: (i: "passive" | "typing" | "multiple" | "cloze") => void;
   batchSize: number;
   setBatchSize: (n: number) => void;
@@ -174,11 +195,21 @@ function StudySetup(props: {
   loading: boolean;
   onStart: () => void;
 }) {
+  const exampleField = props.fields.find((f) => f.fieldType === "example");
+  const clozeAvailable = !!exampleField && props.direction === "targetToSource";
+
+  // Auto-fall-back to passive if cloze was selected but became unavailable.
+  useEffect(() => {
+    if (props.interaction === "cloze" && !clozeAvailable) {
+      props.setInteraction("passive");
+    }
+  }, [clozeAvailable, props]);
+
   const interactions = [
-    { v: "passive", label: "Passive", icon: Eye, desc: "Flip card, rate yourself" },
-    { v: "typing", label: "Typing", icon: Keyboard, desc: "Type the answer" },
-    { v: "multiple", label: "Multiple", icon: CheckSquare, desc: "Pick from 4 options" },
-    { v: "cloze", label: "Cloze", icon: Sparkles, desc: "Fill in the blank" },
+    { v: "passive", label: "Passive", icon: Eye, desc: "Flip card, rate yourself", always: true },
+    { v: "typing", label: "Typing", icon: Keyboard, desc: "Type the answer", always: true },
+    { v: "multiple", label: "Multiple", icon: CheckSquare, desc: "Pick from 4 options", always: false },
+    { v: "cloze", label: "Cloze", icon: Sparkles, desc: "Fill in the blank", always: false },
   ];
 
   return (
@@ -208,21 +239,51 @@ function StudySetup(props: {
           </div>
         </div>
 
+        {/* Direction */}
+        <div>
+          <Label className="text-sm font-medium mb-2 block">Direction</Label>
+          <div className="grid grid-cols-2 gap-2">
+            <ModeButton
+              active={props.direction === "targetToSource"}
+              onClick={() => props.setDirection("targetToSource")}
+              title={`${props.targetLanguage} → ${props.sourceLanguage}`}
+              desc="See target, recall source"
+              icon={ArrowRight}
+            />
+            <ModeButton
+              active={props.direction === "sourceToTarget"}
+              onClick={() => props.setDirection("sourceToTarget")}
+              title={`${props.sourceLanguage} → ${props.targetLanguage}`}
+              desc="See source, type target"
+              icon={ArrowLeftRight}
+            />
+          </div>
+        </div>
+
         {/* Interaction */}
         <div>
           <Label className="text-sm font-medium mb-2 block">Interaction</Label>
           <div className="grid grid-cols-2 gap-2">
-            {interactions.map((i) => (
-              <ModeButton
-                key={i.v}
-                active={props.interaction === i.v}
-                onClick={() => props.setInteraction(i.v as typeof props.interaction)}
-                title={i.label}
-                desc={i.desc}
-                icon={i.icon}
-              />
-            ))}
+            {interactions.map((i) => {
+              const available = i.always || (i.v === "multiple" ? true : i.v === "cloze" ? clozeAvailable : true);
+              return (
+                <ModeButton
+                  key={i.v}
+                  active={props.interaction === i.v}
+                  onClick={() => available && props.setInteraction(i.v as typeof props.interaction)}
+                  title={i.label}
+                  desc={i.desc}
+                  icon={i.icon}
+                  disabled={!available}
+                />
+              );
+            })}
           </div>
+          {!clozeAvailable && (
+            <p className="text-xs text-muted mt-1.5">
+              Cloze requires an example field and target→source direction.
+            </p>
+          )}
         </div>
 
         {/* Options */}
@@ -297,7 +358,8 @@ function StudySetup(props: {
               onClick={props.onStart}
             >
               <Play className="size-4" />
-              Start · {props.mode === "learn" ? props.dueCount : props.totalCards} cards
+              Start ·{" "}
+              {props.mode === "learn" ? props.dueCount : props.totalCards} cards
             </Button>
           )}
         </div>
@@ -312,18 +374,22 @@ function ModeButton({
   title,
   desc,
   icon: Icon,
+  disabled,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
   desc: string;
   icon: typeof Eye;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         "flex items-start gap-2.5 p-3 rounded-xl border text-left transition-all",
+        disabled && "opacity-40 cursor-not-allowed",
         active
           ? "bg-[var(--accent-glow)] border-[var(--accent-primary)]/40"
           : "bg-elevated border surface-border hover:border-[var(--accent-primary)]/30"
@@ -331,12 +397,12 @@ function ModeButton({
     >
       <Icon
         className={cn(
-          "size-4 mt-0.5",
+          "size-4 mt-0.5 shrink-0",
           active ? "text-[var(--accent-primary)]" : "text-muted"
         )}
       />
       <div className="min-w-0">
-        <div className="text-sm font-medium">{title}</div>
+        <div className="text-sm font-medium truncate">{title}</div>
         <div className="text-xs text-muted truncate">{desc}</div>
       </div>
     </button>
@@ -345,99 +411,172 @@ function ModeButton({
 
 // ============== Session ==============
 
+function getAnswer(
+  card: CardData,
+  direction: Direction,
+  fields: BlueprintFieldDef[]
+): string {
+  if (direction === "targetToSource") {
+    // Recall the source-language translation.
+    const srcField =
+      fields.find((f) => f.key === "source_translation") ||
+      fields.find((f) => f.key === "definition") ||
+      fields.find((f) => f.key === "reading") ||
+      fields[0];
+    const raw = srcField ? card.fields[srcField.key] : null;
+    return raw ? fieldValueToAnnotated(raw)?.text || "" : card.word;
+  }
+  // sourceToTarget — recall the target-language word.
+  return card.word;
+}
+
 function StudySession(props: {
   deckId: string;
   cards: CardData[];
   index: number;
   setIndex: (i: number | ((p: number) => number)) => void;
   interaction: "passive" | "typing" | "multiple" | "cloze";
+  direction: Direction;
   fields: BlueprintFieldDef[];
   targetLanguage: string;
   sourceLanguage: string;
+  contextLanguage: string;
   strictAccents: boolean;
   strictMode: boolean;
-  cardDirection: string;
   onComplete: (r: SessionResult) => void;
   onExit: () => void;
   ttsEnabled: boolean;
   ttsRate: number;
+  mode: "learn" | "freestyle";
 }) {
   const reviewMut = useReviewCard(props.deckId);
   const card = props.cards[props.index];
   const [flipped, setFlipped] = useState(false);
-  const [answer, setAnswer] = useState("");
-  const [grade, setGrade] = useState<{
+  const [typingAnswer, setTypingAnswer] = useState("");
+  const [clozeAnswer, setClozeAnswer] = useState("");
+  const [lastResult, setLastResult] = useState<{
     correct: boolean;
     similarity: number;
     exact: boolean;
+    answer: string;
+    typed: string;
   } | null>(null);
   const [choices, setChoices] = useState<CardData[]>([]);
   const [counts, setCounts] = useState({ again: 0, hard: 0, good: 0, easy: 0 });
   const startTimeRef = useRef(Date.now());
-  const inputRef = useRef<HTMLInputElement>(null);
+  const typingInputRef = useRef<HTMLInputElement>(null);
+  const clozeInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset per card
+  const exampleField = useMemo(
+    () => props.fields.find((f) => f.fieldType === "example"),
+    [props.fields]
+  );
+
+  // Cloze data for the current card — memoise the chosen sentence once per card
+  // so the input width and the grading use the SAME sentence (fixes the
+  // multi-sentence inconsistency from the original repo).
+  const clozeData = useMemo(() => {
+    if (props.interaction !== "cloze" || !exampleField || !card) return null;
+    const fieldVal = card.fields[exampleField.key];
+    const ann = fieldValueToAnnotated(fieldVal);
+    const raw = ann?.text || (typeof fieldVal === "string" ? fieldVal : "");
+    if (!raw) return null;
+    const sentence = pickRandomExample(raw);
+    return parseCloze(sentence);
+  }, [props.index, props.interaction, exampleField, card]);
+
+  // Reset state when the card changes.
   useEffect(() => {
     setFlipped(false);
-    setAnswer("");
-    setGrade(null);
+    setTypingAnswer("");
+    setClozeAnswer("");
+    setLastResult(null);
     startTimeRef.current = Date.now();
-    // Build multiple choice options
     if (props.interaction === "multiple") {
       const others = props.cards.filter((c) => c.id !== card.id);
       const shuffled = [...others]
         .sort(() => Math.random() - 0.5)
         .slice(0, 3);
-      setChoices(
-        [...shuffled, card].sort(() => Math.random() - 0.5)
-      );
+      setChoices([...shuffled, card].sort(() => Math.random() - 0.5));
     }
     // Auto-speak the target word on new card (passive mode)
-    if (props.ttsEnabled && props.interaction === "passive") {
-      const word = getCardAnswer(card, props);
-      setTimeout(() => speak(word, { lang: getLanguageBcp47(props.targetLanguage), rate: props.ttsRate }), 200);
+    if (props.ttsEnabled && props.interaction === "passive" && props.direction === "targetToSource") {
+      const word = card.word;
+      setTimeout(
+        () =>
+          speak(word, {
+            lang: getLanguageBcp47(props.targetLanguage),
+            rate: props.ttsRate,
+          }),
+        200
+      );
     }
-  }, [props.index, props.interaction, card, props]);
+  }, [props.index]);
 
-  const frontField = props.fields.find((f) => f.showOnFront);
-  const exampleField = props.fields.find(
-    (f) => f.fieldType === "example" && f.key === "example"
-  );
+  // Auto-focus the relevant input on a new card.
+  useEffect(() => {
+    if (flipped) return;
+    const t = setTimeout(() => {
+      if (props.interaction === "typing") typingInputRef.current?.focus();
+      else if (props.interaction === "cloze") clozeInputRef.current?.focus();
+    }, 80);
+    return () => clearTimeout(t);
+  }, [props.index, props.interaction, flipped]);
 
-  // Determine what's shown on the front
-  const clozeText = exampleField
-    ? getExampleText(card.fields[exampleField.key])
-    : "";
-  const clozeParsed = clozeText ? parseCloze(clozeText) : null;
+  const reveal = (result: {
+    correct: boolean;
+    similarity: number;
+    exact: boolean;
+    answer: string;
+    typed: string;
+  }) => {
+    setLastResult(result);
+    setFlipped(true);
+    // Auto-rate in learn mode for active interactions.
+    if (props.mode === "learn" && props.interaction !== "passive") {
+      const rating: Rating = result.correct ? 3 : 1;
+      reviewMut.mutate({
+        cardId: card.id,
+        rating,
+        timeSpentMs: Date.now() - startTimeRef.current,
+      });
+      setCounts((p) => ({
+        ...p,
+        again: p.again + (rating === 1 ? 1 : 0),
+        good: p.good + (rating === 3 ? 1 : 0),
+      }));
+    }
+  };
 
-  const expectedAnswer = getCardAnswer(card, props);
-
-  const submitAnswer = (userAnswer: string) => {
+  const submitTyping = () => {
+    if (!card) return;
+    const expected = getAnswer(card, props.direction, props.fields);
     const g = gradeAnswer(
-      expectedAnswer,
-      userAnswer,
+      expected,
+      typingAnswer,
       props.strictMode,
       props.strictAccents
     );
-    setGrade(g);
-    setFlipped(true);
-    const rating = gradeToRating(g);
-    recordReview(rating);
+    reveal({
+      ...g,
+      answer: expected,
+      typed: typingAnswer,
+    });
   };
 
-  const recordReview = (rating: Rating) => {
-    const timeSpentMs = Date.now() - startTimeRef.current;
-    reviewMut.mutate({
-      cardId: card.id,
-      rating,
-      timeSpentMs,
+  const submitCloze = () => {
+    if (!card || !clozeData?.hasCloze) return;
+    const g = gradeAnswer(
+      clozeData.answer,
+      clozeAnswer,
+      props.strictMode,
+      props.strictAccents
+    );
+    reveal({
+      ...g,
+      answer: clozeData.answer,
+      typed: clozeAnswer,
     });
-    setCounts((p) => ({
-      again: p.again + (rating === 1 ? 1 : 0),
-      hard: p.hard + (rating === 2 ? 1 : 0),
-      good: p.good + (rating === 3 ? 1 : 0),
-      easy: p.easy + (rating === 4 ? 1 : 0),
-    }));
   };
 
   const next = () => {
@@ -456,22 +595,25 @@ function StudySession(props: {
   };
 
   const rate = (rating: Rating) => {
-    recordReview(rating);
+    reviewMut.mutate({
+      cardId: card.id,
+      rating,
+      timeSpentMs: Date.now() - startTimeRef.current,
+    });
+    setCounts((p) => ({
+      again: p.again + (rating === 1 ? 1 : 0),
+      hard: p.hard + (rating === 2 ? 1 : 0),
+      good: p.good + (rating === 3 ? 1 : 0),
+      easy: p.easy + (rating === 4 ? 1 : 0),
+    }));
     next();
   };
 
-  // Keyboard shortcuts
-  const handleKey = useCallback(
-    (e: KeyboardEvent) => {
+  // Keyboard shortcuts — skip when focused in an input/textarea/select.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") {
-        if (e.key === "Enter" && props.interaction !== "passive") {
-          e.preventDefault();
-          if (!flipped) submitAnswer(answer);
-          else next();
-        }
-        return;
-      }
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "Escape") {
         props.onExit();
       } else if (e.key === " " || e.key === "Enter") {
@@ -486,18 +628,46 @@ function StudySession(props: {
         e.preventDefault();
         rate(Number(e.key) as Rating);
       }
-    },
-    [flipped, answer, props, card]
-  );
-
-  useEffect(() => {
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [handleKey]);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [flipped, props.interaction, props.index]);
 
   if (!card) return null;
 
   const progress = ((props.index + 1) / props.cards.length) * 100;
+  const isTargetFront = props.direction === "targetToSource";
+
+  // Front content for the card.
+  const frontWord = isTargetFront
+    ? card.word
+    : getAnswer(card, "targetToSource", props.fields) || card.word;
+  const frontLabel = isTargetFront
+    ? props.targetLanguage
+    : props.sourceLanguage;
+
+  // Context chip / cloze preview for target→source front.
+  const contextVal =
+    typeof card.fields.context === "string" ? card.fields.context : "";
+  let clozePreview: { before: string; after: string; answer: string } | null = null;
+  if (isTargetFront && props.contextLanguage === "cloze" && exampleField) {
+    const fieldVal = card.fields[exampleField.key];
+    const ann = fieldValueToAnnotated(fieldVal);
+    const raw = ann?.text || (typeof fieldVal === "string" ? fieldVal : "");
+    if (raw) {
+      const parsed = parseCloze(pickRandomExample(raw));
+      if (parsed.hasCloze)
+        clozePreview = {
+          before: parsed.before,
+          after: parsed.after,
+          answer: parsed.answer,
+        };
+    }
+  }
+
+  const frontShowField = props.fields.find(
+    (f) => f.showOnFront && f.key !== "context"
+  );
 
   return (
     <div>
@@ -506,76 +676,90 @@ function StudySession(props: {
         <button
           onClick={props.onExit}
           className="text-muted hover:text-[var(--accent-danger)] p-1"
+          aria-label="Exit session"
         >
           <X className="size-5" />
         </button>
         <div className="flex-1 progress-track h-1.5">
-          <div
-            className="progress-fill"
-            style={{ width: `${progress}%` }}
-          />
+          <div className="progress-fill" style={{ width: `${progress}%` }} />
         </div>
         <span className="text-xs text-muted font-mono whitespace-nowrap">
           {props.index + 1} / {props.cards.length}
         </span>
       </div>
 
-      {/* Interaction badge */}
-      <div className="flex justify-center mb-4">
+      {/* Mode badge */}
+      <div className="flex justify-center mb-4 gap-2">
         <span className="pc-tag capitalize">
-          {props.interaction === "multiple"
-            ? "Multiple choice"
-            : props.interaction}
-          {props.interaction === "typing" && props.cardDirection === "cloze" && " · cloze"}
+          {props.interaction === "multiple" ? "Multiple choice" : props.interaction}
+        </span>
+        <span className="pc-tag">
+          {isTargetFront ? props.targetLanguage : props.sourceLanguage}
         </span>
       </div>
 
-      {/* Card */}
-      <div className="card-3d w-full max-w-lg mx-auto" style={{ height: 320 }}>
+      {/* 3D flip card */}
+      <div
+        className="card-3d w-full max-w-lg mx-auto"
+        style={{ height: 300 }}
+      >
         <div
           className={cn("card-inner", flipped && "flipped")}
-          onClick={() => props.interaction === "passive" && !flipped && setFlipped(true)}
+          onClick={() =>
+            props.interaction === "passive" && !flipped ? setFlipped(true) : undefined
+          }
+          style={{ cursor: props.interaction === "passive" && !flipped ? "pointer" : "default" }}
         >
-          {/* Front */}
-          <div className="card-face pc-card-elevated rounded-2xl p-6 flex-col items-center justify-center text-center cursor-pointer">
-            {props.cardDirection === "cloze" && clozeParsed?.hasCloze ? (
-              <div className="space-y-3">
-                <div className="section-title">Cloze</div>
-                <div className={cn("text-lg", containsCJK(clozeText) && "font-cjk")}>
-                  <RubyText
-                    value={card.fields[exampleField!.key]}
-                    phonetics={exampleField?.phonetics}
-                    renderCloze
-                  />
+          {/* FRONT */}
+          <div className="card-face pc-card-elevated rounded-2xl p-6 flex flex-col items-center justify-center text-center">
+            <div className="section-title mb-3">{frontLabel}</div>
+            <div
+              className={cn(
+                "text-5xl font-display font-semibold leading-tight",
+                containsCJK(frontWord) && "font-cjk"
+              )}
+            >
+              {frontWord}
+            </div>
+
+            {/* Cloze preview on the front (target→source, context_language='cloze') */}
+            {isTargetFront && clozePreview && (
+              <div className="mt-3 px-3 py-2 rounded-lg w-full bg-surface border surface-border">
+                <div className={cn("text-sm leading-relaxed text-secondary", containsCJK(clozePreview.before + clozePreview.after) && "font-cjk")}>
+                  {clozePreview.before}
+                  <span className="px-1.5 rounded font-medium bg-elevated text-muted">
+                    ___
+                  </span>
+                  {clozePreview.after}
                 </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="section-title">Word</div>
-                <div
-                  className={cn(
-                    "text-5xl font-display font-semibold",
-                    containsCJK(card.word) && "font-cjk"
-                  )}
-                >
-                  {card.word}
-                </div>
-                {frontField && card.fields[frontField.key] && (
-                  <div className="text-secondary">
-                    <RubyText
-                      value={card.fields[frontField.key]}
-                      phonetics={frontField.phonetics}
-                    />
-                  </div>
-                )}
               </div>
             )}
-            {!flipped && (
+
+            {/* Context chip (target→source, context_language='target') */}
+            {isTargetFront && contextVal && !clozePreview && (
+              <div className="mt-3 px-3 py-1.5 rounded-lg bg-[var(--accent-glow)] border border-[var(--accent-primary)]/20">
+                <div className={cn("text-sm font-medium text-[var(--accent-primary)]", containsCJK(contextVal) && "font-cjk")}>
+                  {contextVal}
+                </div>
+              </div>
+            )}
+
+            {/* Show-on-front field (e.g. reading/phonetic) */}
+            {isTargetFront && frontShowField && card.fields[frontShowField.key] && (
+              <div className="mt-3 text-base text-secondary">
+                <RubyText
+                  value={card.fields[frontShowField.key]}
+                  phonetics={frontShowField.phonetics}
+                />
+              </div>
+            )}
+
+            {!flipped && props.interaction === "passive" && (
               <div className="absolute bottom-4 text-xs text-muted">
                 tap to reveal · Space
               </div>
             )}
-            {props.ttsEnabled && isTtsSupported() && (
+            {props.ttsEnabled && isTtsSupported() && isTargetFront && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -585,15 +769,16 @@ function StudySession(props: {
                   });
                 }}
                 className="absolute top-4 right-4 text-muted hover:text-[var(--accent-primary)] p-1"
+                aria-label="Pronounce word"
               >
                 <Volume2 className="size-4" />
               </button>
             )}
           </div>
 
-          {/* Back */}
-          <div className="card-face card-back pc-card-elevated rounded-2xl p-5 flex-col overflow-y-auto scrollbar-thin">
-            <div className="flex items-center justify-between mb-3">
+          {/* BACK */}
+          <div className="card-face card-back pc-card-elevated rounded-2xl p-5 flex flex-col overflow-y-auto scrollbar-thin">
+            <div className="flex items-center gap-3 mb-3">
               <div
                 className={cn(
                   "text-2xl font-display font-semibold text-[var(--accent-primary)]",
@@ -605,128 +790,190 @@ function StudySession(props: {
               {card.interval > 0 && (
                 <span className="pc-tag">{formatIntervalDays(card.interval)} interval</span>
               )}
+              {lastResult && props.interaction !== "passive" && (
+                <span
+                  className={cn(
+                    "ml-auto text-xs font-semibold px-2 py-0.5 rounded-full",
+                    lastResult.correct
+                      ? "bg-[var(--accent-secondary)]/15 text-[var(--accent-secondary)]"
+                      : "bg-[var(--accent-danger)]/15 text-[var(--accent-danger)]"
+                  )}
+                >
+                  {lastResult.correct
+                    ? `✓ ${Math.round(lastResult.similarity * 100)}%`
+                    : "✗"}
+                </span>
+              )}
             </div>
 
-            {/* Grade result badge */}
-            {grade && props.interaction !== "passive" && (
-              <div
-                className={cn(
-                  "pc-tag mb-3 self-start",
-                  grade.correct
-                    ? "!bg-[var(--accent-secondary)]/15 !text-[var(--accent-secondary)] !border-transparent"
-                    : "!bg-[var(--accent-danger)]/15 !text-[var(--accent-danger)] !border-transparent"
+            {/* Result detail for typing/cloze */}
+            {lastResult && (props.interaction === "typing" || props.interaction === "cloze") && (
+              <div className="text-sm text-center mb-3 space-y-1">
+                {lastResult.correct ? (
+                  <div className="font-medium text-[var(--accent-secondary)]">
+                    ✓ Correct!
+                    {lastResult.similarity < 1 &&
+                      ` (${Math.round(lastResult.similarity * 100)}%)`}
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-[var(--accent-danger)]">
+                      <span className="font-medium">✗ You typed: </span>
+                      <span className="font-mono">{lastResult.typed || "—"}</span>
+                    </div>
+                    <div className="text-muted">
+                      <span>Correct: </span>
+                      <span className="font-medium text-[var(--text-primary)]">
+                        {lastResult.answer}
+                      </span>
+                    </div>
+                  </>
                 )}
-              >
-                {grade.correct
-                  ? `✓ ${Math.round(grade.similarity * 100)}%`
-                  : `✗ ${answer || "—"}`}
               </div>
             )}
 
-            {/* All fields */}
-            <div className="space-y-2.5 flex-1">
+            {/* All fields list */}
+            <div className="space-y-2 flex-1 overflow-y-auto scrollbar-thin">
               {props.fields
-                .filter((f) => !f.showOnFront && card.fields[f.key])
-                .map((f) => (
-                  <div key={f.key}>
-                    <div className="section-title mb-0.5">{f.label}</div>
-                    <div
-                      className={cn(
-                        "text-sm",
-                        containsCJK(String(card.fields[f.key] || "")) && "font-cjk"
-                      )}
-                    >
-                      <RubyText
-                        value={card.fields[f.key]}
-                        phonetics={f.phonetics}
-                      />
+                .filter((f) => f.key !== "context")
+                .map((field) => {
+                  const value = card.fields[field.key];
+                  if (!value) return null;
+                  const ann = fieldValueToAnnotated(value);
+                  const text = ann?.text || (typeof value === "string" ? value : "");
+                  if (!text) return null;
+                  return (
+                    <div key={field.key} className="flex gap-2 min-w-0">
+                      <span
+                        className="section-title shrink-0 mt-0.5"
+                        style={{ width: 90 }}
+                      >
+                        {field.label}
+                      </span>
+                      <div
+                        className={cn(
+                          "flex-1 min-w-0 text-sm",
+                          containsCJK(text) && "font-cjk"
+                        )}
+                      >
+                        {field.fieldType === "example" ? (
+                          <ExampleDisplay value={value} />
+                        ) : (
+                          <RubyText
+                            value={value}
+                            phonetics={field.phonetics}
+                          />
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Interaction area */}
+      {/* Interaction area below the card */}
       <div className="mt-6">
-        {!flipped && props.interaction === "passive" && (
-          <div className="text-center text-sm text-muted">
-            Press Space or tap the card to reveal the answer
+        {/* Typing input (shows before flip) */}
+        {!flipped && props.interaction === "typing" && (
+          <div className="pc-card p-4">
+            <div className="section-title mb-2">
+              Type the{" "}
+              {isTargetFront
+                ? props.sourceLanguage
+                : props.targetLanguage}{" "}
+              answer
+            </div>
+            <Input
+              ref={typingInputRef}
+              value={typingAnswer}
+              onChange={(e) => setTypingAnswer(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitTyping()}
+              placeholder="Your answer..."
+              className={cn("bg-elevated border surface-border h-11 text-base", containsCJK(typingAnswer) && "font-cjk")}
+            />
+            <Button className="btn-primary w-full h-10 mt-3 gap-2" onClick={submitTyping}>
+              <Check className="size-4" /> Check
+            </Button>
           </div>
         )}
 
-        {/* Typing */}
-        {!flipped && props.interaction === "typing" && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitAnswer(answer);
-            }}
-            className="max-w-md mx-auto"
-          >
-            <Input
-              ref={inputRef}
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder={`Type the ${props.sourceLanguage.toLowerCase()} answer...`}
+        {/* Cloze: inline input within the sentence (the key feature) */}
+        {!flipped && props.interaction === "cloze" && clozeData?.hasCloze && (
+          <div className="pc-card p-5">
+            {/* Hint: show the source translation + context */}
+            {(() => {
+              const hintField =
+                props.fields.find((f) => f.key === "source_translation") ||
+                props.fields.find((f) => f.key === "definition") ||
+                props.fields.find((f) => f.key === "reading");
+              const hint = hintField
+                ? fieldValueToAnnotated(card.fields[hintField.key])?.text
+                : null;
+              const ctx =
+                typeof card.fields.context === "string"
+                  ? card.fields.context
+                  : "";
+              return hint ? (
+                <div className="flex items-center justify-between mb-3">
+                  <div className="section-title">{props.sourceLanguage}</div>
+                  <div className="text-right">
+                    <div className={cn("text-base font-medium", containsCJK(hint) && "font-cjk")}>
+                      {hint}
+                    </div>
+                    {ctx && (
+                      <div className="text-xs text-muted mt-0.5">{ctx}</div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="section-title mb-3">Complete the sentence</div>
+              );
+            })()}
+            {/* The sentence with the inline input where the blank is */}
+            <div
               className={cn(
-                "bg-elevated border surface-border h-12 text-center text-lg",
-                containsCJK(answer) && "font-cjk"
+                "text-center leading-loose mb-4",
+                containsCJK(clozeData.before + clozeData.after) && "font-cjk"
               )}
-              autoFocus
-            />
-            <Button type="submit" className="btn-primary w-full h-10 mt-3 gap-2">
-              <Check className="size-4" /> Submit · Enter
-            </Button>
-          </form>
-        )}
-
-        {/* Cloze */}
-        {!flipped && props.interaction === "cloze" && clozeParsed && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitAnswer(answer);
-            }}
-            className="max-w-md mx-auto text-center"
-          >
-            <div className="text-lg mb-3">
-              Fill in the blank:
+              style={{ fontSize: 18 }}
+            >
+              {clozeData.before}
+              <input
+                ref={clozeInputRef}
+                className="cloze-input"
+                style={{
+                  width: `${Math.max((clozeData.answer?.length || 4) + 2, 4) * 0.95}em`,
+                }}
+                value={clozeAnswer}
+                onChange={(e) => setClozeAnswer(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submitCloze()}
+              />
+              {clozeData.after}
             </div>
-            <Input
-              ref={inputRef}
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="answer..."
-              className={cn(
-                "bg-elevated border surface-border h-11 text-center",
-                containsCJK(answer) && "font-cjk"
-              )}
-              autoFocus
-            />
-            <Button type="submit" className="btn-primary w-full h-10 mt-3 gap-2">
-              <Check className="size-4" /> Submit · Enter
+            <Button className="btn-primary w-full h-10 gap-2" onClick={submitCloze}>
+              <Check className="size-4" /> Check
             </Button>
-          </form>
+          </div>
         )}
 
         {/* Multiple choice */}
         {!flipped && props.interaction === "multiple" && (
-          <div className="grid grid-cols-2 gap-2 max-w-md mx-auto">
+          <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
             {choices.map((c, i) => (
               <button
                 key={c.id}
                 onClick={() => {
-                  setAnswer(c.word);
                   const correct = c.id === card.id;
-                  setGrade({
+                  setTypingAnswer(c.word);
+                  reveal({
                     correct,
                     similarity: correct ? 1 : 0,
                     exact: correct,
+                    answer: card.word,
+                    typed: c.word,
                   });
-                  setFlipped(true);
-                  recordReview(correct ? 2 : 1);
                 }}
                 className={cn(
                   "pc-card p-3 text-center font-medium hover:border-[var(--accent-primary)]/40 transition-colors",
@@ -740,27 +987,71 @@ function StudySession(props: {
           </div>
         )}
 
-        {/* Rating buttons (passive after flip, or after auto-grade) */}
-        {flipped && (props.interaction === "passive" || grade) && (
-          <RatingButtons
-            card={card}
-            onRate={props.interaction === "passive" ? rate : next}
-            isAuto={props.interaction !== "passive"}
-          />
+        {/* Rating buttons (passive after flip, or continue for active modes) */}
+        {flipped && props.interaction === "passive" && (
+          <RatingButtons card={card} onRate={rate} />
+        )}
+        {flipped && props.interaction !== "passive" && (
+          <div className="text-center">
+            <Button
+              className="btn-primary h-11 px-8 gap-2"
+              onClick={next}
+            >
+              Continue · Space
+            </Button>
+          </div>
+        )}
+
+        {/* Passive reveal hint */}
+        {!flipped && props.interaction === "passive" && (
+          <div className="text-center text-sm text-muted">
+            Press Space or tap the card to reveal the answer
+          </div>
         )}
       </div>
     </div>
   );
 }
 
+// Render an example field value, highlighting the cloze word.
+function ExampleDisplay({ value }: { value: unknown }) {
+  const ann = fieldValueToAnnotated(value);
+  const raw = ann?.text || (typeof value === "string" ? value : "");
+  if (!raw) return null;
+  // Pick one sentence (stable per render — caller re-renders on card change).
+  const sentence = pickRandomExample(raw);
+  const parsed = parseCloze(sentence);
+  return (
+    <span>
+      {parsed.hasCloze ? (
+        <>
+          {parsed.before}
+          <mark
+            className="px-1 rounded"
+            style={{
+              background: "rgba(124,106,240,0.2)",
+              color: "var(--accent-primary)",
+              borderRadius: 3,
+              padding: "0 3px",
+            }}
+          >
+            {parsed.answer}
+          </mark>
+          {parsed.after}
+        </>
+      ) : (
+        sentence
+      )}
+    </span>
+  );
+}
+
 function RatingButtons({
   card,
   onRate,
-  isAuto,
 }: {
   card: CardData;
   onRate: (r: Rating) => void;
-  isAuto: boolean;
 }) {
   const prev: SrsStateData = {
     srsState: card.srsState,
@@ -780,16 +1071,6 @@ function RatingButtons({
     { value: 3, label: "Good", cls: "good", key: "3" },
     { value: 4, label: "Easy", cls: "easy", key: "4" },
   ];
-
-  if (isAuto) {
-    return (
-      <div className="text-center">
-        <Button className="btn-primary h-11 px-8 gap-2" onClick={() => onRate(3)}>
-          Continue · Space
-        </Button>
-      </div>
-    );
-  }
 
   return (
     <div className="grid grid-cols-4 gap-2 max-w-lg mx-auto">
@@ -824,8 +1105,12 @@ function StudyComplete({
     : 0;
   return (
     <div className="max-w-md mx-auto text-center animate-slide-up">
-      <div className="text-5xl mb-4">{correctPct >= 80 ? "🎉" : correctPct >= 50 ? "👍" : "💪"}</div>
-      <h2 className="font-display text-3xl font-semibold mb-1">Session Complete</h2>
+      <div className="text-5xl mb-4">
+        {correctPct >= 80 ? "🎉" : correctPct >= 50 ? "👍" : "💪"}
+      </div>
+      <h2 className="font-display text-3xl font-semibold mb-1">
+        Session Complete
+      </h2>
       <p className="text-secondary mb-6">
         {result.reviewed} {result.reviewed === 1 ? "card" : "cards"} reviewed ·{" "}
         {correctPct}% correct
@@ -839,10 +1124,7 @@ function StudyComplete({
       </div>
 
       <div className="progress-track h-2 mb-6">
-        <div
-          className="progress-fill"
-          style={{ width: `${correctPct}%` }}
-        />
+        <div className="progress-fill" style={{ width: `${correctPct}%` }} />
       </div>
 
       <Button className="btn-primary h-11 px-8 gap-2" onClick={onBack}>
@@ -869,39 +1151,4 @@ function StatBox({
       <div className="text-xs text-muted mt-0.5">{label}</div>
     </div>
   );
-}
-
-// ============== Helpers ==============
-
-function getCardAnswer(
-  card: CardData,
-  props: { fields: BlueprintFieldDef[]; cardDirection: string; sourceLanguage: string }
-): string {
-  // For target-direction cards the answer is the source-language definition
-  // (the first text field that isn't showOnFront), fallback to definition field.
-  const defField = props.fields.find(
-    (f) => f.key === "definition" || f.key === "source_translation"
-  );
-  if (defField) {
-    const v = card.fields[defField.key];
-    if (typeof v === "string") return v;
-    if (v && typeof v === "object" && "text" in v)
-      return (v as { text: string }).text;
-  }
-  // Fallback: the word itself
-  return card.word;
-}
-
-function getExampleText(value: unknown): string {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && value.length) {
-    const item = value[0];
-    if (typeof item === "string") return item;
-    if (item && typeof item === "object" && "text" in item)
-      return (item as { text: string }).text;
-  }
-  if (typeof value === "object" && "text" in value)
-    return (value as { text: string }).text;
-  return "";
 }

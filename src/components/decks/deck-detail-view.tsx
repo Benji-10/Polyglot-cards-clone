@@ -68,6 +68,7 @@ import {
 import { DeckFormDialog } from "@/components/decks/deck-form-dialog";
 import { DeckStatsBar } from "@/components/decks/decks-view";
 import { CardFormDialog } from "@/components/decks/card-form-dialog";
+import { QuickAddCard } from "@/components/decks/quick-add-card";
 import { BlueprintEditor } from "@/components/decks/blueprint-editor";
 import { ImportExportPanel } from "@/components/decks/import-export-panel";
 import { RubyText } from "@/components/ruby-text";
@@ -193,6 +194,7 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
         </TabsList>
 
         <TabsContent value="collection" className="mt-4">
+          <QuickAddCard deckId={deckId} fields={deck.fields} />
           <CardCollection
             deckId={deckId}
             fields={deck.fields}

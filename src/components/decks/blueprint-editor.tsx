@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Trash2, GripVertical, Eye, Loader2, RotateCcw } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  GripVertical,
+  Eye,
+  Loader2,
+  RotateCcw,
+  Lock,
+  ChevronDown,
+} from "lucide-react";
 import { useSaveBlueprint } from "@/hooks/use-data";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -17,55 +26,104 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
-import { RUBY_TYPES, EXTRA_TYPES, DEFAULT_BLUEPRINT } from "@/lib/constants";
-import type { BlueprintFieldDef, Phonetics, RubyType, ExtraType } from "@/lib/types";
+import {
+  RUBY_TYPES,
+  EXTRA_TYPES,
+  DEFAULT_BLUEPRINT,
+  MANDATORY_FIELDS,
+  MANDATORY_FIELD_KEYS,
+} from "@/lib/constants";
+import { normalisePhonetics } from "@/lib/ruby";
+import type {
+  BlueprintFieldDef,
+  Phonetics,
+  RubyType,
+  ExtraType,
+} from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export function BlueprintEditor({
   deckId,
-  fields,
+  fields: initialFields,
 }: {
   deckId: string;
   fields: BlueprintFieldDef[];
 }) {
-  const [draft, setDraft] = useState<BlueprintFieldDef[]>(
-    fields.map((f) => ({ ...f }))
+  // Remount the inner editor whenever the deckId changes so the draft state
+  // re-initialises from server data without needing setState-in-effect.
+  return (
+    <BlueprintEditorInner
+      key={deckId}
+      deckId={deckId}
+      initialFields={initialFields}
+    />
+  );
+}
+
+function BlueprintEditorInner({
+  deckId,
+  initialFields,
+}: {
+  deckId: string;
+  initialFields: BlueprintFieldDef[];
+}) {
+  // Initialise the draft once, directly from the server fields (with mandatory
+  // fields prepended). Because this component is keyed by deckId, it remounts
+  // when the deck changes so the state is always fresh.
+  const [draft, setDraft] = useState<BlueprintFieldDef[]>(() =>
+    ensureMandatoryFields(
+      (initialFields && initialFields.length > 0
+        ? initialFields.map((f) => ({
+            ...f,
+            phonetics: normalisePhonetics(f.phonetics),
+          }))
+        : DEFAULT_BLUEPRINT.map((f, i) => ({ ...f, position: i }))
+      ).map((f, i) => ({ ...f, position: i }))
+    )
   );
   const saveMut = useSaveBlueprint();
   const { toast } = useToast();
 
   const update = (i: number, patch: Partial<BlueprintFieldDef>) => {
     setDraft((prev) =>
-      prev.map((f, j) => (i === j ? { ...f, ...patch } : f))
+      prev ? prev.map((f, j) => (i === j ? { ...f, ...patch } : f)) : prev
     );
   };
 
   const move = (i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    if (j < 0 || j >= draft.length) return;
-    const next = [...draft];
-    [next[i], next[j]] = [next[j], next[i]];
-    next.forEach((f, k) => (f.position = k));
-    setDraft(next);
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      next.forEach((f, k) => (f.position = k));
+      return next;
+    });
   };
 
   const add = () => {
-    const key = `field_${Date.now().toString(36)}`;
-    setDraft([
-      ...draft,
-      {
-        key,
-        label: "New Field",
-        description: "",
-        fieldType: "text",
-        showOnFront: false,
-        phonetics: { ruby: "none", extras: [] },
-        position: draft.length,
-      },
-    ]);
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const key = `f_${Math.random().toString(36).slice(2, 8)}`;
+      return [
+        ...prev,
+        {
+          key,
+          label: "New Field",
+          description: "",
+          fieldType: "text",
+          showOnFront: false,
+          phonetics: { ruby: "none", extras: [] },
+          position: prev.length,
+        },
+      ];
+    });
   };
 
   const remove = (i: number) => {
     setDraft((prev) => {
+      if (!prev) return prev;
       const next = prev.filter((_, j) => j !== i);
       next.forEach((f, k) => (f.position = k));
       return next;
@@ -73,10 +131,15 @@ export function BlueprintEditor({
   };
 
   const reset = () => {
-    setDraft(DEFAULT_BLUEPRINT.map((f, i) => ({ ...f, position: i })));
+    setDraft(
+      ensureMandatoryFields(
+        DEFAULT_BLUEPRINT.map((f, i) => ({ ...f, position: i }))
+      )
+    );
   };
 
   const save = async () => {
+    if (!draft) return;
     try {
       await saveMut.mutateAsync({ deckId, fields: draft });
       toast({ title: "Blueprint saved." });
@@ -115,15 +178,16 @@ export function BlueprintEditor({
             </div>
           </div>
           <p className="text-sm text-secondary mb-4">
-            Define what information each card in this deck holds. Drag to
-            reorder, toggle “front” to show a field on the card front.
+            Define what information each card in this deck holds. Reorder with
+            the arrows, toggle “front” to show a field on the card front.
           </p>
 
           <div className="space-y-3">
             {draft.map((field, i) => (
               <FieldRow
-                key={i}
+                key={`${field.key}-${i}`}
                 field={field}
+                mandatory={MANDATORY_FIELD_KEYS.includes(field.key)}
                 onChange={(patch) => update(i, patch)}
                 onMove={(dir) => move(i, dir)}
                 onRemove={() => remove(i)}
@@ -151,8 +215,20 @@ export function BlueprintEditor({
   );
 }
 
+// Prepend mandatory fields (source_translation, context) if not already present.
+function ensureMandatoryFields(
+  fields: BlueprintFieldDef[]
+): BlueprintFieldDef[] {
+  const existingKeys = new Set(fields.map((f) => f.key));
+  const missing = MANDATORY_FIELDS.filter(
+    (m) => !existingKeys.has(m.key)
+  ).map((m) => ({ ...m, position: 0 }));
+  return [...missing, ...fields].map((f, i) => ({ ...f, position: i }));
+}
+
 function FieldRow({
   field,
+  mandatory,
   onChange,
   onMove,
   onRemove,
@@ -160,13 +236,17 @@ function FieldRow({
   canDown,
 }: {
   field: BlueprintFieldDef;
+  mandatory: boolean;
   onChange: (patch: Partial<BlueprintFieldDef>) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
   canUp: boolean;
   canDown: boolean;
 }) {
-  const phonetics = field.phonetics || { ruby: "none", extras: [] };
+  const [showPhonetics, setShowPhonetics] = useState(false);
+  const phonetics = normalisePhonetics(field.phonetics);
+  const activeAnnotations =
+    (phonetics.ruby !== "none" ? 1 : 0) + phonetics.extras.length;
 
   const toggleExtra = (extra: ExtraType) => {
     const has = phonetics.extras.includes(extra);
@@ -180,13 +260,19 @@ function FieldRow({
   };
 
   return (
-    <div className="pc-card-elevated rounded-xl p-3.5 space-y-3">
+    <div
+      className={cn(
+        "pc-card-elevated rounded-xl p-3.5 space-y-3",
+        mandatory && "ring-1 ring-[var(--accent-primary)]/20"
+      )}
+    >
       <div className="flex items-start gap-2">
         <div className="flex flex-col gap-0.5 pt-1">
           <button
             disabled={!canUp}
             onClick={() => onMove(-1)}
             className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30"
+            aria-label="Move up"
           >
             <GripVertical className="size-3.5 rotate-180" />
           </button>
@@ -194,19 +280,30 @@ function FieldRow({
             disabled={!canDown}
             onClick={() => onMove(1)}
             className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30"
+            aria-label="Move down"
           >
             <GripVertical className="size-3.5" />
           </button>
         </div>
         <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           <div className="space-y-1">
-            <Label className="text-xs">Key</Label>
+            <Label className="text-xs flex items-center gap-1.5">
+              Key
+              {mandatory && (
+                <span className="inline-flex items-center gap-0.5 text-[var(--accent-primary)]">
+                  <Lock className="size-2.5" /> locked
+                </span>
+              )}
+            </Label>
             <Input
               value={field.key}
+              disabled={mandatory}
               onChange={(e) =>
-                onChange({ key: e.target.value.replace(/[^a-z0-9_]/gi, "_") })
+                onChange({
+                  key: e.target.value.replace(/[^a-z0-9_]/gi, "_"),
+                })
               }
-              className="bg-elevated border surface-border h-9 font-mono text-sm"
+              className="bg-elevated border surface-border h-9 font-mono text-sm disabled:opacity-60"
             />
           </div>
           <div className="space-y-1">
@@ -218,12 +315,15 @@ function FieldRow({
             />
           </div>
         </div>
-        <button
-          onClick={onRemove}
-          className="text-muted hover:text-[var(--accent-danger)] p-1 mt-5"
-        >
-          <Trash2 className="size-4" />
-        </button>
+        {!mandatory && (
+          <button
+            onClick={onRemove}
+            className="text-muted hover:text-[var(--accent-danger)] p-1 mt-5"
+            aria-label="Remove field"
+          >
+            <Trash2 className="size-4" />
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pl-6">
@@ -232,6 +332,7 @@ function FieldRow({
           <Textarea
             value={field.description}
             onChange={(e) => onChange({ description: e.target.value })}
+            placeholder="AI hint — describe what to put in this field"
             className="bg-elevated border surface-border min-h-[36px] text-sm"
           />
         </div>
@@ -251,6 +352,11 @@ function FieldRow({
               <SelectItem value="example">Example sentence</SelectItem>
             </SelectContent>
           </Select>
+          {field.fieldType === "example" && (
+            <p className="text-[0.7rem] text-muted">
+              Use <code className="font-mono">{"{{word}}"}</code> to mark cloze.
+            </p>
+          )}
         </div>
       </div>
 
@@ -265,50 +371,72 @@ function FieldRow({
           </span>
         </label>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted">Ruby:</span>
-          <Select
-            value={phonetics.ruby}
-            onValueChange={(v) =>
-              onChange({
-                phonetics: { ...phonetics, ruby: v as RubyType },
-              })
-            }
-          >
-            <SelectTrigger className="bg-elevated border surface-border h-8 w-36 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-surface border surface-border max-h-72">
-              {RUBY_TYPES.map((r) => (
-                <SelectItem key={r.value} value={r.value} className="text-xs">
-                  {r.label} <span className="text-muted">— {r.hint}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <button
+          onClick={() => setShowPhonetics((s) => !s)}
+          className="flex items-center gap-1.5 text-sm text-secondary hover:text-[var(--text-primary)] transition-colors"
+        >
+          <ChevronDown
+            className={cn(
+              "size-3.5 transition-transform",
+              showPhonetics && "rotate-180"
+            )}
+          />
+          Phonetic annotations
+          {activeAnnotations > 0 && (
+            <span className="pc-tag !text-[0.6rem] !py-0 !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent">
+              {activeAnnotations}
+            </span>
+          )}
+        </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 pl-6">
-        <span className="text-xs text-muted">Extras:</span>
-        {EXTRA_TYPES.map((ex) => {
-          const active = phonetics.extras.includes(ex.value);
-          return (
-            <button
-              key={ex.value}
-              onClick={() => toggleExtra(ex.value)}
-              className={
-                "pc-tag !cursor-pointer transition-colors " +
-                (active
-                  ? "!bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent"
-                  : "")
+      {showPhonetics && (
+        <div className="pl-6 grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fade-in">
+          <div className="space-y-1">
+            <Label className="text-xs">Ruby annotation</Label>
+            <Select
+              value={phonetics.ruby}
+              onValueChange={(v) =>
+                onChange({
+                  phonetics: { ...phonetics, ruby: v as RubyType },
+                })
               }
             >
-              {ex.label}
-            </button>
-          );
-        })}
-      </div>
+              <SelectTrigger className="bg-elevated border surface-border h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-surface border surface-border max-h-72">
+                {RUBY_TYPES.map((r) => (
+                  <SelectItem key={r.value} value={r.value} className="text-sm">
+                    {r.label} <span className="text-muted">— {r.hint}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Additional annotations</Label>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {EXTRA_TYPES.map((ex) => {
+                const active = phonetics.extras.includes(ex.value);
+                return (
+                  <button
+                    key={ex.value}
+                    onClick={() => toggleExtra(ex.value)}
+                    className={cn(
+                      "pc-tag !cursor-pointer transition-colors",
+                      active &&
+                        "!bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent"
+                    )}
+                  >
+                    {ex.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

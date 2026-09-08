@@ -3,7 +3,7 @@
 // This module is safe for both server and client (returns React nodes
 // only when imported from a client component via renderAnnotated).
 
-import type { AnnotatedText, Phonetics, RubyType } from "./types";
+import type { AnnotatedText, Phonetics, RubyType, FieldValue } from "./types";
 
 // Detect if a string contains CJK characters
 export function isCJK(s: string): boolean {
@@ -50,6 +50,14 @@ export function splitExamples(raw: string): string[] {
     .filter(Boolean);
 }
 
+// Pick a random example from a multi-sentence field (separated by " ;;; ").
+export function pickRandomExample(raw: string): string {
+  if (!raw) return "";
+  const parts = splitExamples(raw);
+  if (parts.length <= 1) return raw.trim();
+  return parts[Math.floor(Math.random() * parts.length)];
+}
+
 // Parse a cloze sentence "私は{{猫}}を飼っている"
 export interface ClozeParse {
   display: string; // "私は___を飼っている"
@@ -83,24 +91,76 @@ export function parseCloze(sentence: string): ClozeParse {
 
 // Extract a plain string from a FieldValue (for search/display)
 export function fieldValueToString(value: unknown): string {
+  if (value == null) return "";
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    return value.map((v) => (typeof v === "string" ? v : v?.text || "")).join(" ");
+    return value
+      .map((v) => (typeof v === "string" ? v : v?.text || ""))
+      .join(" ");
   }
-  if (value && typeof value === "object" && "text" in value) {
+  if (typeof value === "object" && "text" in value) {
     return (value as AnnotatedText).text || "";
   }
   return "";
 }
 
+// Resolve a field value into a single { text, annotations } object (the first
+// one if it's an array). Returns null when empty.
 export function fieldValueToAnnotated(
   value: unknown
-): AnnotatedText | AnnotatedText[] | null {
-  if (typeof value === "string") return { text: value };
-  if (Array.isArray(value)) return value as AnnotatedText[];
-  if (value && typeof value === "object" && "text" in value)
+): AnnotatedText | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value ? { text: value } : null;
+  if (Array.isArray(value)) {
+    const first = value[0];
+    if (!first) return null;
+    if (typeof first === "string") return { text: first };
+    return first as AnnotatedText;
+  }
+  if (typeof value === "object" && "text" in value)
     return value as AnnotatedText;
   return null;
+}
+
+// Get the annotation keys active for a field's phonetics config — used to know
+// which sub-inputs to render in the card form.
+export function getAnnotationKeys(phonetics: Phonetics | undefined): string[] {
+  if (!phonetics) return [];
+  const keys: string[] = [];
+  const rubyMap: Record<string, string> = {
+    furigana: "furigana",
+    pinyin: "pinyin",
+    bopomofo: "bopomofo",
+    jyutping: "jyutping",
+    hangulRomanisation: "romaji",
+    romanisation: "romaji",
+    cyrillicTranslit: "romaji",
+    cantoneseRomanisation: "jyutping",
+  };
+  if (phonetics.ruby && phonetics.ruby !== "none") {
+    const k = rubyMap[phonetics.ruby] || "romaji";
+    if (!keys.includes(k)) keys.push(k);
+  }
+  if (phonetics.extras) {
+    for (const e of phonetics.extras) {
+      if (e === "ipa" && !keys.includes("ipa")) keys.push("ipa");
+      else if (e === "tones" && !keys.includes("tones")) keys.push("tones");
+      else if (e === "english" && !keys.includes("english")) keys.push("english");
+      else if (e === "diacritics" && !keys.includes("ipa")) keys.push("ipa");
+    }
+  }
+  return keys;
+}
+
+// Normalise a phonetics value that may be missing or in a legacy shape.
+export function normalisePhonetics(p: unknown): Phonetics {
+  if (!p || typeof p !== "object") return { ruby: "none", extras: [] };
+  const obj = p as Partial<Phonetics> & { ruby?: unknown; extras?: unknown };
+  const ruby = (typeof obj.ruby === "string" ? obj.ruby : "none") as RubyType;
+  const extras = Array.isArray(obj.extras)
+    ? obj.extras.filter((e): e is string => typeof e === "string")
+    : [];
+  return { ruby, extras: extras as Phonetics["extras"] };
 }
 
 export function getRubyLabel(ruby: RubyType): string {

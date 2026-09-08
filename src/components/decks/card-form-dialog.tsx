@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useCreateCard, useUpdateCard } from "@/hooks/use-data";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -9,15 +9,19 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Plus, Trash2 } from "lucide-react";
-import type { BlueprintFieldDef, CardData, CardFields } from "@/lib/types";
-import { splitExamples } from "@/lib/ruby";
+import { Loader2, Plus, Trash2, Check } from "lucide-react";
+import type {
+  BlueprintFieldDef,
+  CardData,
+  CardFields,
+  AnnotatedText,
+} from "@/lib/types";
+import { getAnnotationKeys, isCJK } from "@/lib/ruby";
 import { cn } from "@/lib/utils";
 
 interface CardFormDialogProps {
@@ -38,7 +42,6 @@ export function CardFormDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-surface border surface-border max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-thin">
-        {/* Remount the body when the target card changes so state initialises fresh. */}
         <CardFormBody
           key={card?.id || "new"}
           deckId={deckId}
@@ -67,14 +70,43 @@ function CardFormBody({
   const updateMut = useUpdateCard(deckId);
   const { toast } = useToast();
 
-  // Initialise state directly from the prop (no effect needed — keyed remount guarantees freshness).
   const [word, setWord] = useState(card?.word ?? "");
-  const [fieldValues, setFieldValues] = useState<Record<string, unknown>>(
-    card?.fields ?? {}
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>(
+    () => initialFieldValues(card?.fields ?? {})
   );
+  const [saved, setSaved] = useState(false);
 
-  const setField = (key: string, value: unknown) => {
-    setFieldValues((prev) => ({ ...prev, [key]: value }));
+  // Build the structured fields object matching the real app's shapes:
+  //  - plain text → string
+  //  - annotated text → [{ text, annotations }]
+  //  - example → [{ text, annotations }, ...] (one per " ;;; " sentence)
+  const buildFields = (): CardFields => {
+    const out: CardFields = {};
+    for (const f of fields) {
+      const text = (fieldValues[f.key] || "").trim();
+      if (!text) continue;
+      const annKeys = getAnnotationKeys(f.phonetics);
+      const isStructured = annKeys.length > 0 || f.fieldType === "example";
+      if (!isStructured) {
+        out[f.key] = text;
+      } else {
+        const annotations: Record<string, string> = {};
+        for (const ak of annKeys) {
+          const v = (fieldValues[`${f.key}__${ak}`] || "").trim();
+          if (v) annotations[ak] = v;
+        }
+        if (f.fieldType === "example") {
+          const lines = text
+            .split(/\s*;;;\s*/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          out[f.key] = lines.map((line) => ({ text: line, annotations }));
+        } else {
+          out[f.key] = [{ text, annotations }];
+        }
+      }
+    }
+    return out;
   };
 
   const handleSubmit = async () => {
@@ -83,23 +115,18 @@ function CardFormBody({
       return;
     }
     try {
-      // Strip empty string fields
-      const cleanFields: CardFields = {};
-      for (const [k, v] of Object.entries(fieldValues)) {
-        if (v === "" || v == null) continue;
-        cleanFields[k] = v as never;
-      }
+      const cleanFields = buildFields();
       if (isEdit && card) {
         await updateMut.mutateAsync({
           id: card.id,
-          word,
+          word: word.trim(),
           fields: cleanFields,
         });
         toast({ title: "Card updated." });
       } else {
         await createMut.mutateAsync({
           deckId,
-          word,
+          word: word.trim(),
           fields: cleanFields,
         });
         toast({ title: "Card added!" });
@@ -122,39 +149,44 @@ function CardFormBody({
         </DialogTitle>
       </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Word (primary) */}
-          <div className="space-y-1.5">
-            <Label>Word / Phrase *</Label>
-            <Input
-              value={word}
-              onChange={(e) => setWord(e.target.value)}
-              placeholder="The target-language word"
-              className={cn("bg-elevated border surface-border", isCJK(word) && "font-cjk")}
-              autoFocus
-            />
-          </div>
-
-          <Separator className="bg-[var(--border-subtle)]" />
-
-          {/* Blueprint fields */}
-          {fields.map((field) => (
-            <FieldEditor
-              key={field.key}
-              field={field}
-              value={fieldValues[field.key]}
-              onChange={(v) => setField(field.key, v)}
-            />
-          ))}
+      <div className="space-y-3">
+        {/* Word (primary) */}
+        <div className="space-y-1.5">
+          <Label>Word / Phrase *</Label>
+          <Input
+            value={word}
+            onChange={(e) => setWord(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+            placeholder="Enter the target language word"
+            className={cn(
+              "bg-elevated border surface-border",
+              isCJK(word) && "font-cjk"
+            )}
+            autoFocus
+          />
         </div>
 
-        <DialogFooter className="pt-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onDone()}
-            className="btn-ghost"
-          >
+        <Separator className="bg-[var(--border-subtle)]" />
+
+        {/* Blueprint fields */}
+        {fields.map((field) => (
+          <FieldEditor
+            key={field.key}
+            field={field}
+            values={fieldValues}
+            onChange={(k, v) =>
+              setFieldValues((prev) => ({ ...prev, [k]: v }))
+            }
+          />
+        ))}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="ghost" onClick={onDone} className="btn-ghost">
             Cancel
           </Button>
           <Button
@@ -163,213 +195,133 @@ function CardFormBody({
             disabled={createMut.isPending || updateMut.isPending}
             className="btn-primary"
           >
-            {(createMut.isPending || updateMut.isPending) && (
+            {(createMut.isPending || updateMut.isPending) ? (
               <Loader2 className="size-4 mr-1 animate-spin" />
-            )}
+            ) : saved ? (
+              <Check className="size-4 mr-1" />
+            ) : null}
             {isEdit ? "Save Changes" : "Add Card"}
           </Button>
-        </DialogFooter>
+        </div>
+      </div>
     </>
   );
 }
 
 function FieldEditor({
   field,
-  value,
+  values,
   onChange,
 }: {
   field: BlueprintFieldDef;
-  value: unknown;
-  onChange: (v: unknown) => void;
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
 }) {
-  const extras = field.phonetics?.extras || [];
-  const hasAnnotations =
-    field.phonetics?.ruby !== "none" || extras.includes("ipa") || extras.includes("tones") || extras.includes("english");
-
-  if (field.fieldType === "example") {
-    // Example field: multiple sentences. Stored as array of {text, annotations}.
-    const arr: { text: string; annotations?: Record<string, string> }[] = Array.isArray(value)
-      ? (value as { text: string; annotations?: Record<string, string> }[])
-      : typeof value === "string" && value
-      ? splitExamples(value).map((t) => ({ text: t }))
-      : [];
-    return (
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label>
-            {field.label}
-            {field.showOnFront && (
-              <span className="ml-1.5 pc-tag !text-[0.6rem] !py-0">front</span>
-            )}
-          </Label>
-          <button
-            onClick={() => onChange([...arr, { text: "" }])}
-            className="text-xs text-[var(--accent-primary)] hover:underline flex items-center gap-0.5"
-          >
-            <Plus className="size-3" /> Add sentence
-          </button>
-        </div>
-        <p className="text-xs text-muted">{field.description}</p>
-        <div className="space-y-2">
-          {arr.length === 0 ? (
-            <Textarea
-              placeholder="Sentence with {{word}} marked for cloze..."
-              className="bg-elevated border surface-border min-h-[60px]"
-              onChange={(e) => {
-                const lines = e.target.value.split(/\s*;;;\s*/).filter(Boolean);
-                onChange(lines.map((t) => ({ text: t })));
-              }}
-            />
-          ) : (
-            arr.map((item, i) => (
-              <div key={i} className="flex gap-2">
-                <Textarea
-                  value={item.text}
-                  placeholder="Sentence with {{word}}..."
-                  className={cn("bg-elevated border surface-border min-h-[50px] flex-1", isCJK(item.text) && "font-cjk")}
-                  onChange={(e) => {
-                    const next = [...arr];
-                    next[i] = { ...item, text: e.target.value };
-                    onChange(next);
-                  }}
-                />
-                {hasAnnotations && (
-                  <AnnotationInputs
-                    field={field}
-                    item={item}
-                    onChange={(ann) => {
-                      const next = [...arr];
-                      next[i] = { ...item, annotations: ann };
-                      onChange(next);
-                    }}
-                  />
-                )}
-                <button
-                  onClick={() => onChange(arr.filter((_, j) => j !== i))}
-                  className="text-muted hover:text-[var(--accent-danger)] p-1"
-                >
-                  <Trash2 className="size-4" />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-        {arr.length > 1 && (
-          <p className="text-[0.7rem] text-muted">
-            Separate sentences with ;;; — a random one is shown at study time.
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  // Text field
-  const textVal =
-    typeof value === "string"
-      ? value
-      : (value as { text?: string })?.text || "";
-  const annVal =
-    typeof value === "object" && value && "annotations" in value
-      ? ((value as { annotations?: Record<string, string> }).annotations) || {}
-      : {};
+  const annKeys = getAnnotationKeys(field.phonetics);
+  const hasAnnotations = annKeys.length > 0;
+  const text = values[field.key] || "";
 
   return (
     <div className="space-y-1.5">
-      <Label>
+      <Label className="text-sm flex items-center gap-1.5">
         {field.label}
         {field.showOnFront && (
-          <span className="ml-1.5 pc-tag !text-[0.6rem] !py-0">front</span>
+          <span className="pc-tag !text-[0.6rem] !py-0">front</span>
+        )}
+        {field.fieldType === "example" && (
+          <span className="text-[0.7rem] text-muted font-normal">
+            — use <code className="font-mono">{"{{word}}"}</code> to mark cloze
+          </span>
         )}
       </Label>
-      <p className="text-xs text-muted">{field.description}</p>
-      <div className="flex gap-2">
+      {!field.description?.startsWith("AI hint") && (
+        <p className="text-xs text-muted">{field.description}</p>
+      )}
+      {field.fieldType === "example" ? (
+        <Textarea
+          value={text}
+          onChange={(e) => onChange(field.key, e.target.value)}
+          placeholder="e.g. She {{loves}} him. ;;; Their {{love}} is eternal."
+          className={cn(
+            "bg-elevated border surface-border min-h-[60px] text-sm resize-none",
+            isCJK(text) && "font-cjk"
+          )}
+        />
+      ) : (
         <Input
-          value={textVal}
-          placeholder={`Enter ${field.label.toLowerCase()}...`}
-          className={cn("bg-elevated border surface-border flex-1", isCJK(textVal) && "font-cjk")}
-          onChange={(e) => {
-            if (hasAnnotations) {
-              onChange({ text: e.target.value, annotations: annVal });
-            } else {
-              onChange(e.target.value);
-            }
-          }}
-        />
-        {hasAnnotations && (
-          <AnnotationInputs
-            field={field}
-            item={{ text: textVal, annotations: annVal }}
-            onChange={(ann) => onChange({ text: textVal, annotations: ann })}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AnnotationInputs({
-  field,
-  item,
-  onChange,
-}: {
-  field: BlueprintFieldDef;
-  item: { text: string; annotations?: Record<string, string> };
-  onChange: (ann: Record<string, string>) => void;
-}) {
-  const ann = item.annotations || {};
-  const ruby = field.phonetics?.ruby;
-  const extras = field.phonetics?.extras || [];
-
-  const rubyKey: Record<string, string> = {
-    furigana: "furigana",
-    pinyin: "pinyin",
-    bopomofo: "bopomofo",
-    jyutping: "jyutping",
-    hangulRomanisation: "romaji",
-    romanisation: "romaji",
-    cyrillicTranslit: "romaji",
-    cantoneseRomanisation: "jyutping",
-  };
-  const rk = ruby && ruby !== "none" ? rubyKey[ruby] || "romaji" : null;
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {rk && (
-        <input
-          value={ann[rk] || ""}
-          placeholder={rk}
-          onChange={(e) => onChange({ ...ann, [rk]: e.target.value })}
-          className="bg-elevated border surface-border rounded-md px-2 py-1 text-xs w-32"
+          value={text}
+          onChange={(e) => onChange(field.key, e.target.value)}
+          placeholder={field.description || field.label}
+          className={cn(
+            "bg-elevated border surface-border text-sm",
+            isCJK(text) && "font-cjk"
+          )}
         />
       )}
-      {extras.includes("ipa") && (
-        <input
-          value={ann.ipa || ""}
-          placeholder="IPA"
-          onChange={(e) => onChange({ ...ann, ipa: e.target.value })}
-          className="bg-elevated border surface-border rounded-md px-2 py-1 text-xs w-28 font-mono"
-        />
-      )}
-      {extras.includes("tones") && (
-        <input
-          value={ann.tones || ""}
-          placeholder="tones"
-          onChange={(e) => onChange({ ...ann, tones: e.target.value })}
-          className="bg-elevated border surface-border rounded-md px-2 py-1 text-xs w-20"
-        />
-      )}
-      {extras.includes("english") && (
-        <input
-          value={ann.english || ""}
-          placeholder="english"
-          onChange={(e) => onChange({ ...ann, english: e.target.value })}
-          className="bg-elevated border surface-border rounded-md px-2 py-1 text-xs w-28"
-        />
+      {hasAnnotations && (
+        <div className="grid grid-cols-2 gap-2 pl-2 border-l-2 border-[var(--accent-primary)]/30">
+          {annKeys.map((ak) => (
+            <div key={ak} className="space-y-1">
+              <Label className="text-[0.7rem] text-muted uppercase tracking-wide">
+                {ak}
+              </Label>
+              <Input
+                value={values[`${field.key}__${ak}`] || ""}
+                onChange={(e) =>
+                  onChange(`${field.key}__${ak}`, e.target.value)
+                }
+                placeholder={ak}
+                className={cn(
+                  "bg-elevated border surface-border h-8 text-xs",
+                  ak === "ipa" && "font-mono"
+                )}
+              />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function isCJK(s: string): boolean {
-  return /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(s);
+// Flatten stored field values into simple string inputs for the form.
+function initialFieldValues(fields: CardFields): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(fields)) {
+    if (typeof val === "string") {
+      out[key] = val;
+    } else if (Array.isArray(val)) {
+      // Join example sentences with " ;;; " or extract single annotated text.
+      out[key] = val
+        .map((v) => (typeof v === "string" ? v : v?.text || ""))
+        .join(" ;;; ");
+      // Also extract annotation values for each known key.
+      const first = val[0];
+      if (first && typeof first === "object" && first.annotations) {
+        for (const [ak, av] of Object.entries(first.annotations)) {
+          if (typeof av === "string") {
+            // If all sentences share the same annotation, use it; otherwise join.
+            const all = val
+              .map((v) =>
+                typeof v === "object" && v.annotations
+                  ? v.annotations[ak] || ""
+                  : ""
+              )
+              .filter(Boolean);
+            out[`${key}__${ak}`] =
+              all.length > 1 ? all.join(" ;;; ") : av;
+          }
+        }
+      }
+    } else if (val && typeof val === "object" && "text" in val) {
+      const a = val as AnnotatedText;
+      out[key] = a.text || "";
+      if (a.annotations) {
+        for (const [ak, av] of Object.entries(a.annotations)) {
+          if (typeof av === "string") out[`${key}__${ak}`] = av;
+        }
+      }
+    }
+  }
+  return out;
 }

@@ -1,0 +1,1648 @@
+     1→import { useState, useCallback, useEffect, useRef } from 'react'
+     2→import { useParams } from 'react-router-dom'
+     3→import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+     4→import { api } from '../lib/api'
+     5→import { useToast } from '../components/shared/Toast'
+     6→import { useAppStore } from '../store/appStore'
+     7→import Modal from '../components/shared/Modal'
+     8→import Papa from 'papaparse'
+     9→
+    10→const BATCH_SIZE = 25
+    11→const INITIAL_ESTIMATE_MS = 11800
+    12→
+    13→const FIELD_TYPE_OPTIONS = [
+    14→  { value: 'text',    label: 'Text' },
+    15→  { value: 'example', label: 'Example (cloze)' },
+    16→]
+    17→
+    18→const valueText = (v) => {
+    19→  if (!v) return ''
+    20→  if (Array.isArray(v)) return v.map(it => it?.text || '').filter(Boolean).join(' ;;; ')
+    21→  if (typeof v === 'object') return v.text || ''
+    22→  return String(v)
+    23→}
+    24→
+    25→// Ruby options — mutually exclusive, shown in a dropdown
+    26→export const RUBY_OPTIONS = [
+    27→  { key: 'none',                   label: 'None' },
+    28→  { key: 'furigana',               label: 'Furigana (hiragana above kanji)',         hint: 'Japanese' },
+    29→  { key: 'romaji',                 label: 'Rōmaji (Latin romanisation)',              hint: 'Japanese' },
+    30→  { key: 'pinyin',                 label: 'Pīnyīn (tonal romanisation)',              hint: 'Mandarin' },
+    31→  { key: 'bopomofo',               label: 'Bopomofo / Zhùyīn (ㄅㄆㄇ)',              hint: 'Mandarin' },
+    32→  { key: 'jyutping',               label: 'Jyutping',                                hint: 'Cantonese' },
+    33→  { key: 'hangulRomanisation',     label: 'Romanisation (Revised Romanisation)',      hint: 'Korean' },
+    34→  { key: 'romanisation',           label: 'Transliteration (Latin script)',           hint: 'Arabic / Farsi / Russian / etc.' },
+    35→  { key: 'cyrillicTranslit',       label: 'Cyrillic Transliteration',                hint: 'Russian / Ukrainian' },
+    36→  { key: 'cantoneseRomanisation',  label: 'Yale / Cantonese Romanisation',           hint: 'Cantonese alt.' },
+    37→  { key: 'tones',                  label: 'Tone marks / numbered tones',             hint: 'Mandarin / Thai / Vietnamese' },
+    38→]
+    39→
+    40→// Extra annotations — can be combined, shown as checkboxes
+    41→export const EXTRA_OPTIONS = [
+    42→  { key: 'diacritics',      label: 'Vowel marks / diacritics',   hint: 'Tashkeel for Arabic, Harakat for Farsi, nikud for Hebrew, etc.' },
+    43→  { key: 'ipa',             label: 'IPA',                         hint: 'International Phonetic Alphabet — shown as /…/' },
+    44→  { key: 'english',         label: 'English gloss',               hint: 'Translation shown below the word' },
+    45→]
+    46→
+    47→// ── usePredictiveProgress ──────────────────────────────────
+    48→// Drives the progress bar by updating a DOM element directly via a ref,
+    49→// bypassing React's state batching which defers updates during async awaits.
+    50→// The text % uses React state (updates every ~100ms to avoid jank).
+    51→// ──────────────────────────────────────────────────────────
+    52→function usePredictiveProgress() {
+    53→  const rafRef         = useRef(null)
+    54→  const barRef         = useRef(null)   // ref to the <div class="import-progress-fill"> DOM node
+    55→  const valueRef       = useRef(0)      // current % value (ground truth)
+    56→  const [displayPct, setDisplayPct] = useState(0) // for the text label only
+    57→
+    58→  const batchTimesRef  = useRef([])
+    59→  const batchStartRef  = useRef(null)
+    60→  const fromRef        = useRef(0)
+    61→  const ceilingRef     = useRef(0)
+    62→  const durationRef    = useRef(INITIAL_ESTIMATE_MS)
+    63→  const totalRef       = useRef(1)
+    64→  const lastTextRef    = useRef(0)      // last time we updated text state
+    65→
+    66→  const updateBar = useCallback((pct) => {
+    67→    valueRef.current = pct
+    68→    if (barRef.current) barRef.current.style.width = `${pct}%`
+    69→    // Update text label at most every 100ms to avoid React thrashing
+    70→    const now = performance.now()
+    71→    if (now - lastTextRef.current > 100) {
+    72→      lastTextRef.current = now
+    73→      setDisplayPct(Math.round(pct))
+    74→    }
+    75→  }, [])
+    76→
+    77→  const tick = useCallback(() => {
+    78→    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    79→
+    80→    const step = () => {
+    81→      const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
+    82→      const t = Math.min(elapsed / durationRef.current, 1)
+    83→      const value = fromRef.current + (ceilingRef.current - fromRef.current) * t
+    84→      updateBar(value)
+    85→      if (t < 1) rafRef.current = requestAnimationFrame(step)
+    86→    }
+    87→
+    88→    rafRef.current = requestAnimationFrame(step)
+    89→  }, [updateBar])
+    90→
+    91→  const reset = useCallback((totalBatches) => {
+    92→    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    93→    totalRef.current       = Math.max(totalBatches, 1)
+    94→    valueRef.current       = 0
+    95→    batchTimesRef.current  = []
+    96→    batchStartRef.current  = null
+    97→    fromRef.current        = 0
+    98→    ceilingRef.current     = 0
+    99→    if (barRef.current) barRef.current.style.width = '0%'
+   100→    setDisplayPct(0)
+   101→  }, [])
+   102→
+   103→  const startBatch = useCallback((batchIndex) => {
+   104→    batchStartRef.current = performance.now()
+   105→    fromRef.current    = (batchIndex / totalRef.current) * 100
+   106→    ceilingRef.current = ((batchIndex + 1) / totalRef.current) * 100
+   107→    const times = batchTimesRef.current
+   108→    durationRef.current = times.length > 0
+   109→      ? times.reduce((a, b) => a + b, 0) / times.length
+   110→      : INITIAL_ESTIMATE_MS
+   111→    tick()
+   112→  }, [tick])
+   113→
+   114→  const completeBatch = useCallback(() => {
+   115→    const elapsed = performance.now() - (batchStartRef.current ?? performance.now())
+   116→    batchTimesRef.current = [...batchTimesRef.current, elapsed]
+   117→    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+   118→    updateBar(ceilingRef.current)
+   119→    setDisplayPct(Math.round(ceilingRef.current))
+   120→  }, [updateBar])
+   121→
+   122→  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
+   123→  return { barRef, displayPct, reset, startBatch, completeBatch }
+   124→}
+   125→
+   126→// ── Main component ─────────────────────────────────────────
+   127→export default function BlueprintPage() {
+   128→  const { deckId } = useParams()
+   129→  const qc = useQueryClient()
+   130→  const toast = useToast()
+   131→  const { settings } = useAppStore()
+   132→
+   133→  const [fields, setFields] = useState(null)
+   134→  const [importMode, setImportMode] = useState('ai') // 'ai' | 'direct'
+   135→  const [importState, setImportState] = useState('idle')
+   136→  const [importError, setImportError] = useState(null)
+   137→  const [progressMsg, setProgressMsg] = useState('')
+   138→  const [totalImported, setTotalImported] = useState(0)
+   139→  // Homograph review: cards pending user approval before saving
+   140→  const [homographPending, setHomographPending] = useState(null) // { groups, onConfirm }
+   141→  // Collision review: incoming cards that match an existing word
+   142→  const [collisionPending, setCollisionPending] = useState(null) // { collisions, noCollision, blueprint, onConfirm }
+   143→
+   144→  const progress = usePredictiveProgress()
+   145→
+   146→  const { data: deck } = useQuery({
+   147→    queryKey: ['decks'],
+   148→    queryFn: api.getDecks,
+   149→    select: d => d.find(x => x.id === deckId),
+   150→  })
+   151→
+   152→  const { data: blueprintData, isLoading: blueprintLoading } = useQuery({
+   153→    queryKey: ['blueprint', deckId],
+   154→    queryFn: () => api.getBlueprintFields(deckId),
+   155→    enabled: !!deckId,
+   156→  })
+   157→
+   158→  // Track original blueprint to diff against on save
+   159→  const originalBlueprintRef = useRef(null)
+   160→
+   161→  useEffect(() => {
+   162→    if (blueprintData !== undefined && fields === null) {
+   163→      const normalised = (blueprintData ?? []).map(f => ({
+   164→        ...f,
+   165→        phonetics: normalisePhonetics(f.phonetics),
+   166→      }))
+   167→      const withMandatory = ensureMandatoryFields(normalised)
+   168→      setFields(withMandatory)
+   169→      originalBlueprintRef.current = withMandatory
+   170→    }
+   171→  }, [blueprintData]) // eslint-disable-line
+   172→
+   173→  // ── Background regen state ───────────────────────────────
+   174→  const [regenState, setRegenState] = useState('idle') // idle | running | done | error
+   175→  const [regenMsg, setRegenMsg] = useState('')
+   176→  const [regenProgress, setRegenProgress] = useState(0) // 0-100
+   177→  const regenBarRef = useRef(null)
+   178→  const regenRafRef = useRef(null)
+   179→
+   180→  const updateRegenBar = (pct) => {
+   181→    setRegenProgress(Math.round(pct))
+   182→    if (regenBarRef.current) regenBarRef.current.style.width = `${pct}%`
+   183→  }
+   184→
+   185→  const computeFieldChanges = (oldFields, newFields) => {
+   186→    const regenFields = []
+   187→
+   188→    for (const nf of newFields) {
+   189→      const of_ = oldFields.find(f => f.key === nf.key)
+   190→
+   191→      if (!of_) {
+   192→        regenFields.push(nf)
+   193→        continue
+   194→      }
+   195→
+   196→      const descChanged = of_.description !== nf.description
+   197→      const typeChanged = of_.field_type  !== nf.field_type
+   198→
+   199→      // Phonetics: regen whenever the annotation set changes in a way that needs new data.
+   200→      // - Ruby changed to any different value (including switching between two non-'none' values)
+   201→      // - Any extra added (was not there before)
+   202→      // Does NOT regen when annotations are only removed (existing data stays in DB, just not shown).
+   203→      const oldPh = normalisePhonetics(of_.phonetics)
+   204→      const newPh = normalisePhonetics(nf.phonetics)
+   205→      const rubyChanged = newPh.ruby !== oldPh.ruby && newPh.ruby !== 'none'
+   206→      const extrasAdded = newPh.extras.some(k => !oldPh.extras.includes(k))
+   207→      const phonNeedsRegen = rubyChanged || extrasAdded
+   208→
+   209→      if (descChanged || typeChanged || phonNeedsRegen) {
+   210→        regenFields.push({
+   211→          ...nf,
+   212→          _forceRegen: descChanged || typeChanged,
+   213→        })
+   214→      }
+   215→    }
+   216→
+   217→    // Keys removed from blueprint → purge their data from all cards
+   218→    const newKeys = new Set(newFields.map(f => f.key))
+   219→    const deletedKeys = oldFields
+   220→      .filter(f => !MANDATORY_FIELD_KEYS.includes(f.key) && !newKeys.has(f.key))
+   221→      .map(f => f.key)
+   222→
+   223→    // Also compute annotation sub-keys that were removed (e.g., fieldKey_english)
+   224→    // so we can delete them from card data
+   225→    const deletedAnnotationKeys = []
+   226→    for (const nf of newFields) {
+   227→      const of_ = oldFields.find(f => f.key === nf.key)
+   228→      if (!of_) continue
+   229→      const oldPh = normalisePhonetics(of_.phonetics)
+   230→      const newPh = normalisePhonetics(nf.phonetics)
+   231→      if (oldPh.ruby !== 'none' && oldPh.ruby !== newPh.ruby) {
+   232→        deletedAnnotationKeys.push(`${nf.key}_${oldPh.ruby}`)
+   233→      }
+   234→      oldPh.extras.forEach(k => {
+   235→        if (!newPh.extras.includes(k)) deletedAnnotationKeys.push(`${nf.key}_${k}`)
+   236→      })
+   237→    }
+   238→
+   239→    return { regenFields, deletedKeys, deletedAnnotationKeys }
+   240→  }
+   241→
+   242→  const runBackgroundRegen = async (savedFields, _allCards) => {
+   243→    const oldFields = originalBlueprintRef.current || []
+   244→    const { regenFields, deletedKeys, deletedAnnotationKeys } = computeFieldChanges(oldFields, savedFields)
+   245→
+   246→    // Delete removed field data and removed annotation sub-keys from cards
+   247→    const allDeleted = [...deletedKeys, ...deletedAnnotationKeys]
+   248→    if (allDeleted.length > 0) {
+   249→      api.deleteCardFields(deckId, allDeleted).catch(e => console.error('Field delete error:', e))
+   250→    }
+   251→
+   252→    if (regenFields.length === 0) {
+   253→      if (allDeleted.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
+   254→      originalBlueprintRef.current = savedFields
+   255→      return
+   256→    }
+   257→
+   258→    // Fetch fresh cards — avoids stale cache
+   259→    let freshCards
+   260→    try { freshCards = await api.getCards(deckId) }
+   261→    catch (e) { toast.error(`Could not fetch cards for refresh: ${e.message}`); return }
+   262→    if (!freshCards.length) { originalBlueprintRef.current = savedFields; return }
+   263→
+   264→    // Only regen cards that are actually missing at least one regen field
+   265→    const getAnnotationKeys = (ph) => {
+   266→      if (!ph) return []
+   267→      if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+   268→      const keys = []
+   269→      if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+   270→      if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+   271→      return keys
+   272→    }
+   273→    const fieldNeedsRegen = (card, field) => {
+   274→      if (field._forceRegen) return true
+   275→      const v = card.fields?.[field.key]
+   276→      if (!v || v === '') return true
+   277→
+   278→      const annotationKeys = getAnnotationKeys(field.phonetics)
+   279→      if (annotationKeys.length === 0) {
+   280→        if (field.field_type === 'example') {
+   281→          const text = typeof v === 'object' ? v.text : v
+   282→          return !text
+   283→        }
+   284→        return false
+   285→      }
+   286→      if (typeof v !== 'object') return true
+   287→      if (!v.text) return true
+   288→      return annotationKeys.some(ak => !v[ak])
+   289→    }
+   290→    const cardsNeedingRegen = freshCards.filter(card =>
+   291→      regenFields.some(f => fieldNeedsRegen(card, f))
+   292→    )
+   293→    if (cardsNeedingRegen.length === 0) {
+   294→      if (deletedKeys.length > 0) qc.invalidateQueries({ queryKey: ['cards', deckId] })
+   295→      originalBlueprintRef.current = savedFields
+   296→      return
+   297→    }
+   298→
+   299→    // Use the same batch size as AI import — keeps regen and import batch counts comparable
+   300→    const batches = []
+   301→    for (let i = 0; i < cardsNeedingRegen.length; i += BATCH_SIZE) {
+   302→      batches.push(cardsNeedingRegen.slice(i, i + BATCH_SIZE))
+   303→    }
+   304→
+   305→    setRegenState('running')
+   306→    setRegenMsg(`Refreshing ${regenFields.length} field${regenFields.length !== 1 ? 's' : ''} for ${cardsNeedingRegen.length} card${cardsNeedingRegen.length !== 1 ? 's' : ''} (${batches.length} batch${batches.length !== 1 ? 'es' : ''})…`)
+   307→    updateRegenBar(0)
+   308→
+   309→    let totalPatched = 0
+   310→    let completedBatches = 0
+   311→    const failedBatchNums = []
+   312→    const targetLang = deckRef.current?.target_language || deck?.target_language || ''
+   313→    const allPatches = []
+   314→
+   315→    // Helper: process one batch with independent retry
+   316→    const processBatch = async (batchIdx, batchCards) => {
+   317→      const vocabItems = batchCards.map(card => {
+   318→        const sense = card.fields?.context || card.fields?.source_translation || ''
+   319→        return sense ? `${card.word} (${sense})` : card.word
+   320→      })
+   321→
+   322→      const MAX_RETRIES = 4
+   323→      let genRes = null
+   324→      let lastErr = null
+   325→      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+   326→        if (attempt > 0) {
+   327→          const delay = 1500 * Math.pow(2, attempt - 1)
+   328→          await new Promise(r => setTimeout(r, delay))
+   329→        }
+   330→        try {
+   331→          genRes = await api.generateCards(deckId, {
+   332→            vocab: vocabItems,
+   333→            targetLanguage: targetLang,
+   334→            sourceLanguage: deckRef.current?.source_language || 'English',
+   335→            contextLanguage: deckRef.current?.context_language || 'target',
+   336→          }, regenFields)
+   337→          if (genRes?.cards?.length) { lastErr = null; break }
+   338→          lastErr = new Error('No cards returned')
+   339→        } catch (e) { lastErr = e }
+   340→      }
+   341→
+   342→      if (lastErr || !genRes?.cards?.length) {
+   343→        console.error(`Regen batch ${batchIdx + 1} failed:`, lastErr?.message)
+   344→        failedBatchNums.push(batchIdx + 1)
+   345→        return
+   346→      }
+   347→
+   348→      // With the nested annotation shape, Gemini returns each field as either:
+   349→      //   - a plain string (source_translation, context, unannotated fields)
+   350→      //   - an object { text, annotationType, ... } (annotated/example fields)
+   351→      // We patch by field key — the deep-merge in cards-patch handles nested merging.
+   352→      const changedFieldKeys = regenFields.map(f => f.key)
+   353→
+   354→      genRes.cards.filter(c => !c._error).forEach((genCard, idx) => {
+   355→        const card = batchCards[idx]
+   356→        if (!card) return
+   357→        const fieldData = {}
+   358→        changedFieldKeys.forEach(k => {
+   359→          const v = genCard[k]
+   360→          if (v !== undefined && v !== null && v !== '') fieldData[k] = v
+   361→        })
+   362→        if (regenFields.some(f => fieldData[f.key] != null)) {
+   363→          allPatches.push({ id: card.id, word: card.word, fields: fieldData })
+   364→        }
+   365→      })
+   366→    }
+   367→
+   368→    // Run batches 2 at a time (parallel) — doubles throughput within rate limit
+   369→    const CONCURRENCY = 2
+   370→    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+   371→      const chunk = batches.slice(i, i + CONCURRENCY)
+   372→      const startBatchIdx = i
+   373→
+   374→      // Animate progress bar across this chunk
+   375→      const chunkStart = (i / batches.length) * 90 // reserve last 10% for saving
+   376→      const chunkEnd   = (Math.min(i + CONCURRENCY, batches.length) / batches.length) * 90
+   377→      const startTime  = performance.now()
+   378→      const ESTIMATE   = 12000 // slightly longer — two batches in parallel
+   379→
+   380→      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
+   381→      const tickRegen = () => {
+   382→        const t = Math.min((performance.now() - startTime) / ESTIMATE, 0.9)
+   383→        updateRegenBar(chunkStart + (chunkEnd - chunkStart) * t)
+   384→        if (t < 0.9) regenRafRef.current = requestAnimationFrame(tickRegen)
+   385→      }
+   386→      regenRafRef.current = requestAnimationFrame(tickRegen)
+   387→      setRegenMsg(`Batches ${startBatchIdx + 1}–${Math.min(startBatchIdx + CONCURRENCY, batches.length)} / ${batches.length} — generating…`)
+   388→
+   389→      await Promise.all(chunk.map((batchCards, j) => processBatch(startBatchIdx + j, batchCards)))
+   390→
+   391→      if (regenRafRef.current) cancelAnimationFrame(regenRafRef.current)
+   392→      completedBatches += chunk.length
+   393→      updateRegenBar((completedBatches / batches.length) * 90)
+   394→    }
+   395→
+   396→    // Saving phase — the last 10% of the bar
+   397→    if (allPatches.length > 0) {
+   398→      setRegenMsg(`Saving ${allPatches.length} card${allPatches.length !== 1 ? 's' : ''}…`)
+   399→      updateRegenBar(90)
+   400→      try {
+   401→        await api.patchCards(deckId, allPatches)
+   402→        totalPatched = allPatches.length
+   403→      } catch (e) {
+   404→        console.error('Regen patch failed:', e)
+   405→        failedBatchNums.push('save')
+   406→      }
+   407→    }
+   408→
+   409→    qc.invalidateQueries({ queryKey: ['cards', deckId] })
+   410→    updateRegenBar(100)
+   411→
+   412→    const anyFailed = failedBatchNums.length > 0
+   413→    if (anyFailed) {
+   414→      originalBlueprintRef.current = oldFields
+   415→      setRegenState('error')
+   416→      setRegenMsg(`${totalPatched} cards updated. Failures: batch${failedBatchNums.length > 1 ? 'es' : ''} ${failedBatchNums.join(', ')} — save again to retry.`)
+   417→      toast.error(`Some card updates failed. Save the blueprint again to retry.`)
+   418→    } else {
+   419→      originalBlueprintRef.current = savedFields
+   420→      setRegenState('done')
+   421→      setRegenMsg(`${totalPatched} card${totalPatched !== 1 ? 's' : ''} refreshed`)
+   422→    }
+   423→  }
+   424→
+   425→  const allCardsRef = useRef([])
+   426→  const { data: allCards = [] } = useQuery({
+   427→    queryKey: ['cards', deckId],
+   428→    queryFn: () => api.getCards(deckId),
+   429→    enabled: !!deckId,
+   430→  })
+   431→  useEffect(() => { allCardsRef.current = allCards }, [allCards])
+   432→
+   433→  const saveMutation = useMutation({
+   434→    mutationFn: f => api.saveBlueprintFields(deckId, f),
+   435→    onSuccess: saved => {
+   436→      const normalised = saved.map(f => ({ ...f, phonetics: normalisePhonetics(f.phonetics) }))
+   437→      setFields(normalised)
+   438→      qc.setQueryData(['blueprint', deckId], saved)
+   439→      toast.success('Blueprint saved!')
+   440→      // Kick off background regeneration if there are cards to update
+   441→      if (allCardsRef.current.length > 0) {
+   442→        runBackgroundRegen(normalised, allCardsRef.current)
+   443→      }
+   444→    },
+   445→    onError: e => toast.error(`Save failed: ${e.message}`),
+   446→  })
+   447→
+   448→  const batchSaveMutation = useMutation({
+   449→    mutationFn: cards => api.batchCreateCards(cards),
+   450→    onSuccess: () => qc.invalidateQueries({ queryKey: ['cards', deckId] }),
+   451→    onError: e => toast.error(`Save error: ${e.message}`),
+   452→  })
+   453→
+   454→  // ── Field management ────────────────────────────────────
+   455→  // Keys are stable identifiers generated once at creation — they never change,
+   456→  // even when the user renames the label.
+   457→  const makeKey = () => `f_${Math.random().toString(36).slice(2, 8)}`
+   458→
+   459→  const addField = suggested => {
+   460→    const base = suggested
+   461→      ? { ...suggested, key: suggested.key || makeKey(), phonetics: normalisePhonetics(suggested.phonetics) }
+   462→      : { key: makeKey(), label: 'New Field', description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] } }
+   463→    setFields(prev => [...prev, { ...base, position: prev.length }])
+   464→  }
+   465→
+   466→  const updateField = (idx, patch) => setFields(prev => prev.map((f, i) => i === idx ? { ...f, ...patch } : f))
+   467→  const removeField = idx => setFields(prev => prev.filter((_, i) => i !== idx))
+   468→  const moveField = (idx, dir) => {
+   469→    setFields(prev => {
+   470→      const next = [...prev]
+   471→      const swap = idx + dir
+   472→      if (swap < 0 || swap >= next.length) return prev
+   473→      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+   474→      return next
+   475→    })
+   476→  }
+   477→
+   478→  const fieldsRef = useRef(fields)
+   479→  useEffect(() => { fieldsRef.current = fields }, [fields])
+   480→  const deckRef = useRef(deck)
+   481→  useEffect(() => { deckRef.current = deck }, [deck])
+   482→
+   483→  // ── CSV Import (AI) ──────────────────────────────────────
+   484→  const handleCSV = useCallback(file => {
+   485→    setImportState('generating')
+   486→    setImportError(null)
+   487→    setTotalImported(0)
+   488→
+   489→    Papa.parse(file, {
+   490→      complete: async res => {
+   491→        try {
+   492→          const vocab = res.data.flat().map(v => String(v).trim()).filter(Boolean)
+   493→          if (!vocab.length) { setImportError('No words found in CSV'); setImportState('error'); return }
+   494→
+   495→          // Warn if the CSV looks like a structured file (multiple populated columns per row)
+   496→          // — the AI importer expects a flat word list, not headers + data
+   497→          const rows = res.data.filter(r => Array.isArray(r) && r.some(c => String(c).trim()))
+   498→          if (rows.length >= 2) {
+   499→            const firstRowCols = rows[0].filter(c => String(c).trim()).length
+   500→            const secondRowCols = rows[1].filter(c => String(c).trim()).length
+   501→            if (firstRowCols > 1 && secondRowCols > 1) {
+   502→              setImportError(
+   503→                'This looks like a structured CSV with multiple columns. ' +
+   504→                'The AI importer expects a plain word list (one word per cell). ' +
+   505→                'Use the "Direct CSV" tab if you want to import a structured file.'
+   506→              )
+   507→              setImportState('error')
+   508→              return
+   509→            }
+   510→          }
+   511→
+   512→          const batches = []
+   513→          for (let i = 0; i < vocab.length; i += BATCH_SIZE) batches.push(vocab.slice(i, i + BATCH_SIZE))
+   514→          progress.reset(batches.length)
+   515→          setProgressMsg('Generating cards…')
+   516→
+   517→          let allGeneratedCards = []
+   518→          let failedBatchCount = 0
+   519→
+   520→          // Helper: fetch one batch with independent exponential backoff retry
+   521→          const fetchBatch = async (batchIdx) => {
+   522→            const MAX_RETRIES = 4
+   523→            let genRes = null
+   524→            let lastErr = null
+   525→            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+   526→              if (attempt > 0) {
+   527→                const delay = 1500 * Math.pow(2, attempt - 1)
+   528→                await new Promise(r => setTimeout(r, delay))
+   529→              }
+   530→              try {
+   531→                genRes = await api.generateCards(deckId, {
+   532→                  vocab: batches[batchIdx],
+   533→                  targetLanguage: deckRef.current?.target_language || deck?.target_language || '',
+   534→                  sourceLanguage: deckRef.current?.source_language || 'English',
+   535→                  contextLanguage: deckRef.current?.context_language || 'target',
+   536→                }, fieldsRef.current || [])
+   537→                if (genRes?.cards?.length) { lastErr = null; break }
+   538→                lastErr = new Error('No cards returned from API')
+   539→              } catch (e) { lastErr = e }
+   540→            }
+   541→            return { batchIdx, genRes, lastErr }
+   542→          }
+   543→
+   544→          // Validate cards from a batch result
+   545→          const requiredKeys = (fieldsRef.current || []).map(f => f.key).filter(k => !MANDATORY_FIELD_KEYS.includes(k))
+   546→          const validateCards = (cards) => cards.filter(c => {
+   547→            if (c._error || !c.word) return false
+   548→            if (requiredKeys.length === 0) return true
+   549→            return requiredKeys.some(k => c[k] && c[k] !== '')
+   550→          })
+   551→
+   552→          // Rolling pipeline: 2 batches in-flight at once.
+   553→          // As soon as any slot frees up, the next batch starts immediately.
+   554→          const CONCURRENCY = 2
+   555→          let nextBatch = 0
+   556→          let completedCount = 0
+   557→
+   558→          await new Promise(resolve => {
+   559→            const launch = () => {
+   560→              while (nextBatch < batches.length && (nextBatch - completedCount) < CONCURRENCY) {
+   561→                const idx = nextBatch++
+   562→                progress.startBatch(idx)
+   563→                fetchBatch(idx).then(({ genRes, lastErr }) => {
+   564→                  completedCount++
+   565→                  if (lastErr || !genRes?.cards?.length) {
+   566→                    failedBatchCount++
+   567→                  } else {
+   568→                    allGeneratedCards.push(...validateCards(genRes.cards))
+   569→                    setProgressMsg(`${allGeneratedCards.length} card${allGeneratedCards.length !== 1 ? 's' : ''} generated…`)
+   570→                  }
+   571→                  progress.completeBatch(idx)
+   572→                  if (completedCount >= batches.length) resolve()
+   573→                  else launch()
+   574→                })
+   575→              }
+   576→            }
+   577→            launch()
+   578→            if (batches.length === 0) resolve()
+   579→          })
+   580→
+   581→          if (!allGeneratedCards.length) {
+   582→            setImportError(failedBatchCount > 0 ? `All ${failedBatchCount} batch${failedBatchCount !== 1 ? 'es' : ''} failed — check your connection and try again` : 'No valid cards generated')
+   583→            setImportState('error')
+   584→            return
+   585→          }
+   586→
+   587→          // ── Saving phase — update progress bar for this step ──
+   588→          setProgressMsg(`Saving ${allGeneratedCards.length} cards…`)
+   589→
+   590→          // ── Detect homographs ──────────────────────────────
+   591→          const wordGroups = {}
+   592→          for (const card of allGeneratedCards) {
+   593→            if (!wordGroups[card.word]) wordGroups[card.word] = []
+   594→            wordGroups[card.word].push(card)
+   595→          }
+   596→
+   597→          const homographGroups = Object.entries(wordGroups)
+   598→            .filter(([, cards]) => cards.length > 1)
+   599→            .map(([word, cards]) => ({
+   600→              word,
+   601→              senses: cards.map(c => ({ card: c, selected: true, sense: c._sense || '' })),
+   602→            }))
+   603→
+   604→          // Function that detects collisions then saves
+   605→          const proceedToCollisionCheck = async (cardsToSave) => {
+   606→            // Build word → array of existing cards (a word can have multiple for homographs)
+   607→            const existingByWord = {}
+   608→            for (const c of allCardsRef.current) {
+   609→              if (!existingByWord[c.word]) existingByWord[c.word] = []
+   610→              existingByWord[c.word].push(c)
+   611→            }
+   612→
+   613→            // For each incoming card, find the best matching existing card.
+   614→            // Match by _sense if available (context/source_translation field), then by index.
+   615→            const usedExistingIds = new Set()
+   616→            const collisions = []
+   617→            const noCollision = []
+   618→
+   619→            for (const incoming of cardsToSave) {
+   620→              const existingArr = existingByWord[incoming.word]
+   621→              if (!existingArr || existingArr.length === 0) {
+   622→                noCollision.push(incoming)
+   623→                continue
+   624→              }
+   625→
+   626→              // Try to match by sense (context or source_translation field)
+   627→              const incomingSense = (incoming._sense || incoming.source_translation || '').toLowerCase().trim()
+   628→              let match = null
+   629→
+   630→              if (incomingSense) {
+   631→                match = existingArr.find(e => {
+   632→                  if (usedExistingIds.has(e.id)) return false
+   633→                  const eSense = (e.fields?.context || e.fields?.source_translation || '').toLowerCase().trim()
+   634→                  return eSense === incomingSense || eSense.includes(incomingSense) || incomingSense.includes(eSense)
+   635→                })
+   636→              }
+   637→
+   638→              // Fall back to first unmatched existing card
+   639→              if (!match) match = existingArr.find(e => !usedExistingIds.has(e.id))
+   640→
+   641→              if (match) {
+   642→                usedExistingIds.add(match.id)
+   643→                collisions.push({ incoming, existing: match })
+   644→              } else {
+   645→                // All existing cards for this word are already matched — this is a new sense
+   646→                noCollision.push(incoming)
+   647→              }
+   648→            }
+   649→
+   650→            if (collisions.length === 0) {
+   651→              await saveCards(noCollision)
+   652→            } else {
+   653→              setImportState('review')
+   654→              setCollisionPending({
+   655→                collisions,
+   656→                noCollision,
+   657→                blueprint: fieldsRef.current || [],
+   658→                onConfirm: async (decisions) => {
+   659→                  setCollisionPending(null)
+   660→                  setImportState('generating')
+   661→
+   662→                  const toAdd = [...noCollision]
+   663→                  const toUpdate = []
+   664→                  for (const { incoming, existing, action } of decisions) {
+   665→                    if (action === 'add')    toAdd.push(incoming)
+   666→                    if (action === 'update') toUpdate.push({ incoming, existing })
+   667→                  }
+   668→
+   669→                  if (toUpdate.length) {
+   670→                    // Patch by id — correct for homographs
+   671→                    const patches = toUpdate.map(({ incoming, existing }) => {
+   672→                      const { _meanings, _sense, _error, word, ...fields } = incoming
+   673→                      return { id: existing.id, word, fields }
+   674→                    })
+   675→                    await api.patchCards(deckId, patches).catch(() => {})
+   676→                  }
+   677→
+   678→                  await saveCards(toAdd)
+   679→                },
+   680→              })
+   681→            }
+   682→          }
+   683→
+   684→          // Function that actually saves the chosen cards
+   685→          const saveCards = async (cardsToSave) => {
+   686→            const toSave = cardsToSave.map(c => {
+   687→              // Strip internal meta fields — everything else is card field data
+   688→              const { _meanings, _sense, _error, word, ...fields } = c
+   689→              return { deck_id: deckId, word, fields }
+   690→            })
+   691→            if (toSave.length) {
+   692→              await batchSaveMutation.mutateAsync(toSave)
+   693→              setTotalImported(prev => prev + toSave.length)
+   694→            }
+   695→            setImportState('done')
+   696→            qc.invalidateQueries({ queryKey: ['cards', deckId] })
+   697→          }
+   698→
+   699→          if (homographGroups.length === 0) {
+   700→            // No homographs — check collisions then save
+   701→            await proceedToCollisionCheck(allGeneratedCards)
+   702→          } else {
+   703→            // Pause import and show homograph review modal
+   704→            setImportState('review')
+   705→            setHomographPending({
+   706→              groups: homographGroups,
+   707→              allCards: allGeneratedCards,
+   708→              onConfirm: async (approvedHomographCards) => {
+   709→                setHomographPending(null)
+   710→                setImportState('generating')
+   711→                // Replace homograph words with only the approved senses
+   712→                const homographWords = new Set(homographGroups.map(g => g.word))
+   713→                const nonHomographCards = allGeneratedCards.filter(c => !homographWords.has(c.word))
+   714→                await proceedToCollisionCheck([...nonHomographCards, ...approvedHomographCards])
+   715→              },
+   716→            })
+   717→          }
+   718→        } catch (e) { setImportError(e.message); setImportState('error') }
+   719→      },
+   720→      error: e => { setImportError(e.message); setImportState('error') },
+   721→    })
+   722→  }, [deckId, progress]) // eslint-disable-line
+   723→
+   724→  const handleDrop = useCallback(e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSV(f) }, [handleCSV])
+   725→
+   726→  // ── Direct CSV import (no AI) ───────────────────────────
+   727→  // Row 1: headers — word, [field keys], optional SRS columns
+   728→  // Row 2: metadata JSON per field column (label, description, field_type, show_on_front, phonetics)
+   729→  //        — only present in files exported from this app
+   730→  // Row 3+: card data
+   731→  const handleDirectCSV = useCallback(file => {
+   732→    setImportState('generating')
+   733→    setImportError(null)
+   734→    setTotalImported(0)
+   735→
+   736→    Papa.parse(file, {
+   737→      header: false,       // parse raw rows so we can handle the metadata row ourselves
+   738→      skipEmptyLines: true,
+   739→      complete: async res => {
+   740→        try {
+   741→          const allRows = res.data
+   742→          if (allRows.length < 2) { setImportError('CSV needs at least a header and one data row'); setImportState('error'); return }
+   743→
+   744→          const headers = allRows[0].map(h => String(h).trim())
+   745→          if (!headers.includes('word')) { setImportError('CSV must have a "word" column'); setImportState('error'); return }
+   746→
+   747→          const SRS_COLS = new Set(['srs_state', 'last_reviewed', 'interval', 'stability', 'difficulty', 'repetitions', 'seen'])
+   748→
+   749→          // Detect metadata row: row 2 where at least one blueprint field column contains JSON with "label"
+   750→          let metaRow = null
+   751→          let dataStartIdx = 1
+   752→          const row2 = allRows[1]
+   753→          const hasMeta = row2.some((cell, i) => {
+   754→            if (!cell || headers[i] === 'word' || SRS_COLS.has(headers[i])) return false
+   755→            try { const p = JSON.parse(cell); return typeof p === 'object' && 'label' in p } catch { return false }
+   756→          })
+   757→          if (hasMeta) { metaRow = row2; dataStartIdx = 2 }
+   758→
+   759→          const fieldCols = headers.filter(h => h !== 'word' && !SRS_COLS.has(h))
+   760→
+   761→          // If we have a metadata row, update the blueprint with the imported field definitions
+   762→          if (metaRow) {
+   763→            const newFields = []
+   764→            for (let i = 0; i < headers.length; i++) {
+   765→              const h = headers[i]
+   766→              if (h === 'word' || SRS_COLS.has(h) || MANDATORY_FIELD_KEYS.includes(h)) continue
+   767→              try {
+   768→                const meta = JSON.parse(metaRow[i] || '{}')
+   769→                newFields.push({
+   770→                  key:           h,
+   771→                  label:         meta.label        || h,
+   772→                  description:   meta.description  || '',
+   773→                  field_type:    meta.field_type   || 'text',
+   774→                  show_on_front: meta.show_on_front || false,
+   775→                  phonetics:     normalisePhonetics(meta.phonetics),
+   776→                  position:      newFields.length,
+   777→                })
+   778→              } catch {
+   779→                newFields.push({ key: h, label: h, description: '', field_type: 'text', show_on_front: false, phonetics: { ruby: 'none', extras: [] }, position: newFields.length })
+   780→              }
+   781→            }
+   782→            if (newFields.length > 0) {
+   783→              // Keep mandatory fields, prepend them, save blueprint
+   784→              const mandatory = (fieldsRef.current || []).filter(f => MANDATORY_FIELD_KEYS.includes(f.key))
+   785→              const merged = [...mandatory, ...newFields]
+   786→              try {
+   787→                await api.saveBlueprintFields(deckId, merged)
+   788→                qc.invalidateQueries({ queryKey: ['blueprint', deckId] })
+   789→                setFields(merged.map(f => ({ ...f, phonetics: normalisePhonetics(f.phonetics) })))
+   790→                originalBlueprintRef.current = merged
+   791→              } catch (e) {
+   792→                console.error('Blueprint update failed:', e)
+   793→              }
+   794→            }
+   795→          }
+   796→
+   797→          // Parse data rows into cards
+   798→          const wordIdx = headers.indexOf('word')
+   799→          const colIdx  = (col) => headers.indexOf(col)
+   800→          const cardsToSave = allRows.slice(dataStartIdx)
+   801→            .filter(row => row[wordIdx]?.trim())
+   802→            .map(row => {
+   803→              const card = { deck_id: deckId, word: row[wordIdx].trim(), fields: {} }
+   804→              for (const col of fieldCols) {
+   805→                const idx = colIdx(col)
+   806→                if (idx >= 0 && row[idx] !== undefined && row[idx] !== '') {
+   807→                  const raw = row[idx]
+   808→                  // Field values that are objects were exported as JSON — try to parse them back
+   809→                  try {
+   810→                    const parsed = JSON.parse(raw)
+   811→                    card.fields[col] = (parsed && typeof parsed === 'object') ? parsed : raw
+   812→                  } catch {
+   813→                    card.fields[col] = raw
+   814→                  }
+   815→                }
+   816→              }
+   817→              if (row[colIdx('srs_state')])     card.srs_state     = row[colIdx('srs_state')]
+   818→              if (row[colIdx('last_reviewed')]) card.last_reviewed  = row[colIdx('last_reviewed')]
+   819→              if (row[colIdx('interval')])      card.interval       = Number(row[colIdx('interval')]) || 0
+   820→              if (row[colIdx('stability')])     card.stability      = Number(row[colIdx('stability')]) || 0
+   821→              if (row[colIdx('difficulty')])    card.difficulty     = Number(row[colIdx('difficulty')]) || 5
+   822→              if (row[colIdx('repetitions')])   card.repetitions    = Number(row[colIdx('repetitions')]) || 0
+   823→              return card
+   824→            })
+   825→
+   826→          if (!cardsToSave.length) { setImportError('No valid data rows found'); setImportState('error'); return }
+   827→
+   828→          // Collision check — word → array to handle homographs
+   829→          const existingByWord = {}
+   830→          for (const c of allCardsRef.current) {
+   831→            if (!existingByWord[c.word]) existingByWord[c.word] = []
+   832→            existingByWord[c.word].push(c)
+   833→          }
+   834→          const usedIds = new Set()
+   835→          const collisions = []
+   836→          const noCollision = []
+   837→          for (const incoming of cardsToSave) {
+   838→            const arr = existingByWord[incoming.word]
+   839→            if (!arr?.length) { noCollision.push(incoming); continue }
+   840→            const match = arr.find(e => !usedIds.has(e.id))
+   841→            if (match) { usedIds.add(match.id); collisions.push({ incoming, existing: match }) }
+   842→            else noCollision.push(incoming)
+   843→          }
+   844→
+   845→          const saveDirect = async (toAdd, toUpdate) => {
+   846→            if (toUpdate.length) {
+   847→              const patches = toUpdate.map(({ incoming, existing }) => ({
+   848→                id: existing.id, word: incoming.word, fields: incoming.fields,
+   849→              }))
+   850→              await api.patchCards(deckId, patches).catch(() => {})
+   851→            }
+   852→            if (toAdd.length) {
+   853→              await batchSaveMutation.mutateAsync(toAdd)
+   854→              setTotalImported(toAdd.length)
+   855→            }
+   856→            qc.invalidateQueries({ queryKey: ['cards', deckId] })
+   857→            setImportState('done')
+   858→          }
+   859→
+   860→          if (collisions.length === 0) {
+   861→            await saveDirect(cardsToSave, [])
+   862→          } else {
+   863→            setImportState('review')
+   864→            setCollisionPending({
+   865→              collisions,
+   866→              noCollision,
+   867→              blueprint: fieldsRef.current || [],
+   868→              onConfirm: async (decisions) => {
+   869→                setCollisionPending(null)
+   870→                setImportState('generating')
+   871→                const toAdd = [...noCollision]
+   872→                const toUpdate = []
+   873→                for (const { incoming, existing, action } of decisions) {
+   874→                  if (action === 'add')    toAdd.push(incoming)
+   875→                  if (action === 'update') toUpdate.push({ incoming, existing })
+   876→                }
+   877→                await saveDirect(toAdd, toUpdate)
+   878→              },
+   879→            })
+   880→          }
+   881→        } catch (e) { setImportError(e.message); setImportState('error') }
+   882→      },
+   883→      error: e => { setImportError(e.message); setImportState('error') },
+   884→    })
+   885→  }, [deckId, batchSaveMutation, qc]) // eslint-disable-line
+   886→
+   887→  if (blueprintLoading || fields === null) {
+   888→    return (
+   889→      <div className="max-w-3xl mx-auto px-6 py-10">
+   890→        <div className="section-title mb-1">Blueprint & Import</div>
+   891→        <div className="font-display text-3xl font-bold mb-8" style={{ color: 'var(--text-primary)' }}>{deck?.name || '...'}</div>
+   892→        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-14 rounded-xl shimmer" />)}</div>
+   893→      </div>
+   894→    )
+   895→  }
+   896→
+   897→  const usedKeys = new Set(fields.map(f => f.key))
+   898→  const quickAdd = (settings.quickAddFields || []).filter(s => !usedKeys.has(s.key))
+   899→
+   900→  return (
+   901→    <div className="max-w-3xl mx-auto px-6 py-10">
+   902→      <div className="mb-8">
+   903→        <div className="section-title mb-1">Blueprint & Import</div>
+   904→        <h1 className="font-display text-3xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>{deck?.name || 'Deck'}</h1>
+   905→        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Define fields Gemini fills for each card, then import your vocab.</p>
+   906→      </div>
+   907→
+   908→      {/* ── Fields ─────────────────────────────────────── */}
+   909→      <section className="mb-10">
+   910→        <div className="flex items-center justify-between mb-4">
+   911→          <h2 className="font-display font-semibold text-lg" style={{ color: 'var(--text-primary)' }}>Card Fields</h2>
+   912→          <button className="btn-primary text-xs py-1.5 px-3" onClick={() => addField()}>+ Add Field</button>
+   913→        </div>
+   914→
+   915→        {fields.length === 0 ? (
+   916→          <div className="text-center py-10 card rounded-2xl mb-4">
+   917→            <div className="text-3xl mb-3">🗺</div>
+   918→            <div className="font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>No fields yet</div>
+   919→            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Add fields or use quick-add below</div>
+   920→          </div>
+   921→        ) : (
+   922→          <div className="space-y-2 mb-4">
+   923→            {fields.map((field, idx) => (
+   924→              <FieldRow key={idx} field={field}
+   925→                onUpdate={p => updateField(idx, p)}
+   926→                onRemove={() => removeField(idx)}
+   927→                onMoveUp={() => moveField(idx, -1)}
+   928→                onMoveDown={() => moveField(idx, 1)}
+   929→                isFirst={idx === 0} isLast={idx === fields.length - 1}
+   930→              />
+   931→            ))}
+   932→          </div>
+   933→        )}
+   934→
+   935→        {quickAdd.length > 0 && (
+   936→          <div className="mb-5">
+   937→            <div className="section-title mb-2">Quick add</div>
+   938→            <div className="flex flex-wrap gap-2">
+   939→              {quickAdd.map(s => (
+   940→                <button key={s.key} className="tag cursor-pointer transition-all hover:border-purple-500" onClick={() => addField(s)}>
+   941→                  + {s.label}
+   942→                </button>
+   943→              ))}
+   944→            </div>
+   945→          </div>
+   946→        )}
+   947→
+   948→        <div className="flex items-center gap-3">
+   949→          <button className="btn-primary" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate(fields)}>
+   950→            {saveMutation.isPending ? 'Saving...' : '✓ Save Blueprint'}
+   951→          </button>
+   952→          {saveMutation.isSuccess && regenState === 'idle' && (
+   953→            <span className="text-sm" style={{ color: 'var(--accent-secondary)' }}>Saved!</span>
+   954→          )}
+   955→        </div>
+   956→
+   957→        {/* Background regen progress */}
+   958→        {regenState !== 'idle' && (
+   959→          <div className="mt-3 rounded-xl p-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+   960→            <div className="flex items-center gap-3 mb-2">
+   961→              <span className="text-sm" style={{ animation: regenState === 'running' ? 'pulse 1.5s ease-in-out infinite' : 'none' }}>
+   962→                {regenState === 'done' ? '✅' : regenState === 'error' ? '❌' : '⚡'}
+   963→              </span>
+   964→              <div className="flex-1 min-w-0">
+   965→                <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+   966→                  {regenState === 'done' ? 'Cards updated' : 'Updating existing cards…'}
+   967→                </div>
+   968→                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{regenMsg}</div>
+   969→              </div>
+   970→              <div className="text-xs font-mono tabular-nums flex-shrink-0" style={{ color: 'var(--accent-primary)' }}>
+   971→                {regenProgress}%
+   972→              </div>
+   973→            </div>
+   974→            <div className="progress-bar">
+   975→              <div ref={regenBarRef} className="import-progress-fill" style={{ width: '0%' }} />
+   976→            </div>
+   977→            {regenState === 'done' && (
+   978→              <button className="btn-ghost text-xs mt-2 py-1" onClick={() => { setRegenState('idle'); setRegenProgress(0) }}>
+   979→                Dismiss
+   980→              </button>
+   981→            )}
+   982→          </div>
+   983→        )}
+   984→      </section>
+   985→
+   986→      {/* ── Import ─────────────────────────────────────── */}
+   987→      <section className="mb-10">
+   988→        <h2 className="font-display font-semibold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>Import Vocabulary</h2>
+   989→
+   990→        {/* Mode tabs */}
+   991→        <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: 'var(--bg-elevated)' }}>
+   992→          {[['ai', '✨ AI (fill fields)'], ['direct', '📋 Direct CSV']].map(([v, l]) => (
+   993→            <button key={v}
+   994→              className="text-xs px-3 py-1.5 rounded-lg transition-all font-medium"
+   995→              style={{
+   996→                background: importMode === v ? 'var(--bg-card)' : 'transparent',
+   997→                color: importMode === v ? 'var(--text-primary)' : 'var(--text-muted)',
+   998→                boxShadow: importMode === v ? 'var(--shadow-card)' : 'none',
+   999→              }}
+  1000→              onClick={() => { setImportMode(v); setImportState('idle'); setImportError(null) }}>
+  1001→              {l}
+  1002→            </button>
+  1003→          ))}
+  1004→        </div>
+  1005→
+  1006→        {importMode === 'ai' && (
+  1007→          <>
+  1008→            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+  1009→              Drop a CSV with one word per cell — Gemini fills all blueprint fields in batches of {BATCH_SIZE}.
+  1010→            </p>
+  1011→            {importState === 'idle' || importState === 'error' ? (
+  1012→              <label onDrop={handleDrop} onDragOver={e => e.preventDefault()}
+  1013→                className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
+  1014→                style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
+  1015→                <span className="text-4xl">📄</span>
+  1016→                <div className="text-center">
+  1017→                  <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>Drop CSV here or click to browse</div>
+  1018→                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>One word per cell — any column layout</div>
+  1019→                </div>
+  1020→                {importError && (
+  1021→                  <div className="text-xs px-3 py-2 rounded-lg w-full text-center"
+  1022→                    style={{ background: 'rgba(225,112,85,0.1)', color: 'var(--accent-danger)', border: '1px solid rgba(225,112,85,.2)' }}>
+  1023→                    ✕ {importError}
+  1024→                  </div>
+  1025→                )}
+  1026→                <input type="file" accept=".csv,.txt" className="hidden" onChange={e => e.target.files[0] && handleCSV(e.target.files[0])} />
+  1027→              </label>
+  1028→            ) : importState === 'done' ? (
+  1029→              <ImportDone totalImported={totalImported} onReset={() => { setImportState('idle'); setTotalImported(0); progress.reset(1) }} />
+  1030→            ) : importState === 'review' ? (
+  1031→              <ImportReviewing />
+  1032→            ) : (
+  1033→              <ImportProgress progressMsg={progressMsg} totalImported={totalImported} displayPct={progress.displayPct} barRef={progress.barRef} />
+  1034→            )}
+  1035→          </>
+  1036→        )}
+  1037→
+  1038→        {importMode === 'direct' && (
+  1039→          <>
+  1040→            <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+  1041→              CSV with headers matching blueprint field keys. First column must be <code className="font-mono">word</code>.
+  1042→              Optional SRS columns: <code className="font-mono">srs_state</code>, <code className="font-mono">last_reviewed</code>, <code className="font-mono">interval</code>.
+  1043→            </p>
+  1044→            <div className="text-xs mb-4 px-3 py-2 rounded-lg font-mono overflow-x-auto"
+  1045→              style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+  1046→              word,{fields.filter(f => !MANDATORY_FIELD_KEYS.includes(f.key)).map(f => f.key).join(',')}
+  1047→            </div>
+  1048→            {importState === 'idle' || importState === 'error' ? (
+  1049→              <label onDrop={e => { e.preventDefault(); e.dataTransfer.files[0] && handleDirectCSV(e.dataTransfer.files[0]) }}
+  1050→                onDragOver={e => e.preventDefault()}
+  1051→                className="flex flex-col items-center justify-center gap-3 p-10 rounded-2xl border-2 border-dashed cursor-pointer transition-colors hover:border-purple-500"
+  1052→                style={{ borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
+  1053→                <span className="text-4xl">📋</span>
+  1054→                <div className="text-center">
+  1055→                  <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>Drop structured CSV or click to browse</div>
+  1056→                  <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Headers must match field keys shown above</div>
+  1057→                </div>
+  1058→                {importError && (
+  1059→                  <div className="text-xs px-3 py-2 rounded-lg w-full text-center"
+  1060→                    style={{ background: 'rgba(225,112,85,0.1)', color: 'var(--accent-danger)', border: '1px solid rgba(225,112,85,.2)' }}>
+  1061→                    ✕ {importError}
+  1062→                  </div>
+  1063→                )}
+  1064→                <input type="file" accept=".csv,.txt" className="hidden" onChange={e => e.target.files[0] && handleDirectCSV(e.target.files[0])} />
+  1065→              </label>
+  1066→            ) : importState === 'done' ? (
+  1067→              <ImportDone totalImported={totalImported} onReset={() => { setImportState('idle'); setTotalImported(0) }} />
+  1068→            ) : importState === 'review' ? (
+  1069→              <ImportReviewing />
+  1070→            ) : (
+  1071→              <div className="card p-6 text-center">
+  1072→                <div className="text-sm animate-pulse" style={{ color: 'var(--text-muted)' }}>Saving cards…</div>
+  1073→              </div>
+  1074→            )}
+  1075→          </>
+  1076→        )}
+  1077→      </section>
+  1078→
+  1079→      {/* ── Manual add ─────────────────────────────────── */}
+  1080→      <section>
+  1081→        <h2 className="font-display font-semibold text-lg mb-4" style={{ color: 'var(--text-primary)' }}>Add Card Manually</h2>
+  1082→        <ManualCardForm deckId={deckId} fields={fields}
+  1083→          onSaved={() => { qc.invalidateQueries({ queryKey: ['cards', deckId] }); toast.success('Card added!') }} />
+  1084→      </section>
+  1085→
+  1086→      {/* ── Homograph review modal ──────────────────────── */}
+  1087→      {homographPending && (
+  1088→        <HomographModal
+  1089→          groups={homographPending.groups}
+  1090→          blueprint={fields}
+  1091→          onConfirm={(approved) => homographPending.onConfirm(approved)}
+  1092→          onClose={() => { setHomographPending(null); setImportState('done') }}
+  1093→        />
+  1094→      )}
+  1095→
+  1096→      {/* ── Collision review modal ──────────────────────── */}
+  1097→      {collisionPending && (
+  1098→        <CollisionModal
+  1099→          collisions={collisionPending.collisions}
+  1100→          blueprint={collisionPending.blueprint}
+  1101→          onConfirm={(decisions) => collisionPending.onConfirm(decisions)}
+  1102→          onClose={() => { setCollisionPending(null); setImportState('done') }}
+  1103→        />
+  1104→      )}
+  1105→    </div>
+  1106→  )
+  1107→}
+  1108→
+  1109→// ── Shared import status sub-components ────────────────────
+  1110→function ImportDone({ totalImported, onReset }) {
+  1111→  return (
+  1112→    <div className="card p-6 text-center">
+  1113→      <div className="text-4xl mb-3">✅</div>
+  1114→      <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Import complete!</div>
+  1115→      <div className="text-sm" style={{ color: 'var(--text-muted)' }}>{totalImported} card{totalImported !== 1 ? 's' : ''} added.</div>
+  1116→      <button className="btn-secondary mt-4 text-xs" onClick={onReset}>Import more</button>
+  1117→    </div>
+  1118→  )
+  1119→}
+  1120→
+  1121→function ImportReviewing() {
+  1122→  return (
+  1123→    <div className="card p-6 text-center">
+  1124→      <div className="text-4xl mb-3">🔍</div>
+  1125→      <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Reviewing…</div>
+  1126→      <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Check the popup to confirm which cards to import.</div>
+  1127→    </div>
+  1128→  )
+  1129→}
+  1130→
+  1131→function ImportProgress({ progressMsg, totalImported, displayPct, barRef }) {
+  1132→  const isSaving = progressMsg?.includes('Saving')
+  1133→  const barColor = isSaving
+  1134→    ? 'linear-gradient(90deg, var(--accent-secondary), var(--accent-primary))'
+  1135→    : 'linear-gradient(90deg, var(--accent-primary), var(--accent-secondary))'
+  1136→
+  1137→  return (
+  1138→    <div className="card p-6">
+  1139→      <div className="flex items-center justify-between mb-3">
+  1140→        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+  1141→          {isSaving ? 'Saving cards…' : progressMsg || 'Generating…'}
+  1142→        </div>
+  1143→        <div className="text-sm font-mono tabular-nums" style={{ color: 'var(--accent-primary)' }}>
+  1144→          {displayPct}%
+  1145→        </div>
+  1146→      </div>
+  1147→      <div className="progress-bar">
+  1148→        <div ref={barRef} className="import-progress-fill" style={{ width: '0%', background: barColor }} />
+  1149→      </div>
+  1150→      {!isSaving && (
+  1151→        <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+  1152→          {totalImported > 0 ? `${totalImported} card${totalImported !== 1 ? 's' : ''} ready` : 'AI is filling in card fields…'}
+  1153→        </div>
+  1154→      )}
+  1155→    </div>
+  1156→  )
+  1157→}
+  1158→
+  1159→// Keys that are mandatory — always present, cannot be deleted
+  1160→export const MANDATORY_FIELD_KEYS = ['source_translation', 'context']
+  1161→
+  1162→// Default definitions for mandatory fields
+  1163→const MANDATORY_DEFAULTS = {
+  1164→  source_translation: {
+  1165→    key: 'source_translation',
+  1166→    label: 'Translation',
+  1167→    description: 'A single short translation of the word in the source language. One word or a very short phrase only — no alternatives, no slash-separated variants.',
+  1168→    field_type: 'text',
+  1169→    show_on_front: false,
+  1170→    phonetics: { ruby: 'none', extras: [] },
+  1171→  },
+  1172→  context: {
+  1173→    key: 'context',
+  1174→    label: 'Context',
+  1175→    description: 'Grammatical or usage context to disambiguate — e.g. "(masculine singular)", "(verb, informal)", "(pl.)". Shown on card front in Target→Source mode. Leave empty if not needed.',
+  1176→    field_type: 'text',
+  1177→    show_on_front: false,
+  1178→    phonetics: { ruby: 'none', extras: [] },
+  1179→  },
+  1180→}
+  1181→
+  1182→/**
+  1183→ * Ensure mandatory fields exist in the fields array.
+  1184→ * If missing, prepend them. Never removes or reorders existing ones.
+  1185→ */
+  1186→function ensureMandatoryFields(fields) {
+  1187→  const result = [...fields]
+  1188→  for (const key of [...MANDATORY_FIELD_KEYS].reverse()) {
+  1189→    if (!result.find(f => f.key === key)) {
+  1190→      result.unshift({ ...MANDATORY_DEFAULTS[key], phonetics: normalisePhonetics(MANDATORY_DEFAULTS[key].phonetics) })
+  1191→    }
+  1192→  }
+  1193→  return result
+  1194→}
+  1195→
+  1196→// ── Helpers ────────────────────────────────────────────────
+  1197→function normalisePhonetics(ph) {
+  1198→  if (!ph) return { ruby: 'none', extras: [] }
+  1199→  if (Array.isArray(ph)) {
+  1200→    const RUBY_KEYS = RUBY_OPTIONS.map(o => o.key).filter(k => k !== 'none')
+  1201→    const ruby = ph.find(k => RUBY_KEYS.includes(k)) || 'none'
+  1202→    const extras = ph.filter(k => !RUBY_KEYS.includes(k))
+  1203→    return { ruby, extras }
+  1204→  }
+  1205→  if (typeof ph === 'object') return { ruby: ph.ruby || 'none', extras: ph.extras || [] }
+  1206→  return { ruby: 'none', extras: [] }
+  1207→}
+  1208→
+  1209→// ── FieldRow ────────────────────────────────────────────────
+  1210→function FieldRow({ field, onUpdate, onRemove, onMoveUp, onMoveDown, isFirst, isLast }) {
+  1211→  const [showPhonetics, setShowPhonetics] = useState(false)
+  1212→  const ph = normalisePhonetics(field.phonetics)
+  1213→  const hasAnnotations = ph.ruby !== 'none' || ph.extras.length > 0
+  1214→  const isMandatory = MANDATORY_FIELD_KEYS.includes(field.key)
+  1215→
+  1216→  const setRuby = ruby => onUpdate({ phonetics: { ...ph, ruby } })
+  1217→  const toggleExtra = key => {
+  1218→    const next = ph.extras.includes(key) ? ph.extras.filter(k => k !== key) : [...ph.extras, key]
+  1219→    onUpdate({ phonetics: { ...ph, extras: next } })
+  1220→  }
+  1221→
+  1222→  // ── Mandatory field — fully locked, compact display ────────
+  1223→  if (isMandatory) {
+  1224→    const descriptions = {
+  1225→      source_translation: 'Single clean word in your source language. Used as the typing target in Source → Target mode.',
+  1226→      context: 'Grammatical hint shown on the card front (Target → Source) to disambiguate homographs. Generated in the target language.',
+  1227→    }
+  1228→    const colors = {
+  1229→      source_translation: { bg: 'rgba(0,212,168,.08)', border: 'rgba(0,212,168,.25)', text: 'var(--accent-secondary)', icon: '🎯' },
+  1230→      context:            { bg: 'var(--accent-glow)',   border: 'rgba(124,106,240,.3)', text: 'var(--accent-primary)',   icon: '💡' },
+  1231→    }
+  1232→    const c = colors[field.key] || colors.context
+  1233→    return (
+  1234→      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${c.border}`, background: c.bg }}>
+  1235→        <div className="p-3 flex items-center gap-3">
+  1236→          <div className="flex flex-col gap-0.5 flex-shrink-0">
+  1237→            <button disabled={isFirst} className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+  1238→            <button disabled={isLast}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+  1239→          </div>
+  1240→          <span style={{ fontSize: '14px' }}>{c.icon}</span>
+  1241→          <div className="flex-1 min-w-0">
+  1242→            <div className="flex items-center gap-2">
+  1243→              <span className="text-sm font-medium" style={{ color: c.text }}>{field.label}</span>
+  1244→              <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>{field.key}</span>
+  1245→              <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>🔒 mandatory</span>
+  1246→            </div>
+  1247→            <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{descriptions[field.key]}</div>
+  1248→          </div>
+  1249→          <div className="w-7 flex-shrink-0" />
+  1250→        </div>
+  1251→      </div>
+  1252→    )
+  1253→  }
+  1254→
+  1255→  // ── Regular editable field ─────────────────────────────────
+  1256→  return (
+  1257→    <div className="card rounded-xl overflow-hidden">
+  1258→      <div className="p-4 flex items-start gap-3">
+  1259→        {/* Reorder */}
+  1260→        <div className="flex flex-col gap-0.5 flex-shrink-0 mt-1">
+  1261→          <button disabled={isFirst}  className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveUp}>▲</button>
+  1262→          <button disabled={isLast}   className="btn-ghost p-0.5 text-xs disabled:opacity-20" onClick={onMoveDown}>▼</button>
+  1263→        </div>
+  1264→
+  1265→        {/* Config */}
+  1266→        <div className="flex-1 min-w-0 space-y-2">
+  1267→          <div className="flex items-center gap-2 flex-wrap">
+  1268→            <input className="input text-sm py-1.5 flex-1 min-w-32" value={field.label}
+  1269→              onChange={e => onUpdate({ label: e.target.value })} placeholder="Label" />
+  1270→            <select className="input text-xs py-1.5 w-36" value={field.field_type}
+  1271→              onChange={e => onUpdate({ field_type: e.target.value })}>
+  1272→              {FIELD_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+  1273→            </select>
+  1274→            <label className="flex items-center gap-1.5 text-xs cursor-pointer flex-shrink-0" style={{ color: 'var(--text-secondary)' }}>
+  1275→              <input type="checkbox" checked={!!field.show_on_front} onChange={e => onUpdate({ show_on_front: e.target.checked })} />
+  1276→              Show on front
+  1277→            </label>
+  1278→          </div>
+  1279→
+  1280→          <input className="input text-xs py-1.5 w-full" value={field.description || ''}
+  1281→            onChange={e => onUpdate({ description: e.target.value })}
+  1282→            placeholder="AI hint — describe what to put in this field" />
+  1283→
+  1284→          {/* Phonetics panel — available for all field types */}
+  1285→          <div>
+  1286→              <button className="flex items-center gap-1.5 text-xs transition-colors"
+  1287→                style={{ color: hasAnnotations ? 'var(--accent-primary)' : 'var(--text-muted)' }}
+  1288→                onClick={() => setShowPhonetics(s => !s)}>
+  1289→                <span>{showPhonetics ? '▾' : '▸'}</span>
+  1290→                Phonetic annotations
+  1291→                {hasAnnotations && (
+  1292→                  <span className="px-1.5 py-0.5 rounded-full text-xs font-medium"
+  1293→                    style={{ background: 'var(--accent-glow)', color: 'var(--accent-primary)' }}>
+  1294→                    {[ph.ruby !== 'none' ? ph.ruby : null, ...ph.extras].filter(Boolean).join(', ')}
+  1295→                  </span>
+  1296→                )}
+  1297→              </button>
+  1298→
+  1299→              {showPhonetics && (
+  1300→                <div className="mt-2 p-3 rounded-xl space-y-3"
+  1301→                  style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+  1302→                  <div>
+  1303→                    <div className="section-title mb-1.5">Ruby (shown above the word)</div>
+  1304→                    <select className="input text-xs py-1.5" value={ph.ruby} onChange={e => setRuby(e.target.value)}>
+  1305→                      {RUBY_OPTIONS.map(o => (
+  1306→                        <option key={o.key} value={o.key}>
+  1307→                          {o.label}{o.hint ? ` — ${o.hint}` : ''}
+  1308→                        </option>
+  1309→                      ))}
+  1310→                    </select>
+  1311→                    <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+  1312→                      Only one ruby annotation can be shown at a time.
+  1313→                    </div>
+  1314→                  </div>
+  1315→                  <div>
+  1316→                    <div className="section-title mb-1.5">Additional annotations</div>
+  1317→                    <div className="space-y-1.5">
+  1318→                      {EXTRA_OPTIONS.map(opt => (
+  1319→                        <label key={opt.key} className="flex items-start gap-2.5 cursor-pointer py-0.5">
+  1320→                          <input type="checkbox" className="mt-0.5 flex-shrink-0"
+  1321→                            checked={ph.extras.includes(opt.key)}
+  1322→                            onChange={() => toggleExtra(opt.key)} />
+  1323→                          <div>
+  1324→                            <div className="text-xs font-medium" style={{ color: ph.extras.includes(opt.key) ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+  1325→                              {opt.label}
+  1326→                            </div>
+  1327→                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{opt.hint}</div>
+  1328→                          </div>
+  1329→                        </label>
+  1330→                      ))}
+  1331→                    </div>
+  1332→                  </div>
+  1333→                  {hasAnnotations && (
+  1334→                    <div className="text-xs pt-2" style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+  1335→                      Gemini will generate:{' '}
+  1336→                      <span style={{ color: 'var(--accent-secondary)' }}>
+  1337→                        {[ph.ruby !== 'none' && `${ph.ruby} (ruby)`, ...ph.extras].filter(Boolean).join(', ')}
+  1338→                      </span>
+  1339→                    </div>
+  1340→                  )}
+  1341→                </div>
+  1342→              )}
+  1343→            </div>
+  1344→        </div>
+  1345→
+  1346→        <button className="btn-ghost p-1.5 text-xs flex-shrink-0" style={{ color: 'var(--accent-danger)' }} onClick={onRemove}>✕</button>
+  1347→      </div>
+  1348→    </div>
+  1349→  )
+  1350→}
+  1351→
+  1352→// ── ManualCardForm ──────────────────────────────────────────
+  1353→function ManualCardForm({ deckId, fields, onSaved }) {
+  1354→  const [word, setWord] = useState('')
+  1355→  // fieldValues stores { fieldKey: string } — always plain text per input
+  1356→  const [fieldValues, setFieldValues] = useState({})
+  1357→  const [saving, setSaving] = useState(false)
+  1358→  const [saved, setSaved] = useState(false)
+  1359→
+  1360→  const getAnnotationKeys = (ph) => {
+  1361→    if (!ph) return []
+  1362→    if (Array.isArray(ph)) return ph.filter(k => k && k !== 'none')
+  1363→    const keys = []
+  1364→    if (ph.ruby && ph.ruby !== 'none') keys.push(ph.ruby)
+  1365→    if (Array.isArray(ph.extras)) keys.push(...ph.extras)
+  1366→    return keys
+  1367→  }
+  1368→
+  1369→  const handleSave = async () => {
+  1370→    if (!word.trim()) return
+  1371→    setSaving(true)
+  1372→    try {
+  1373→      // Wrap annotated/example field values as [{ text, annotations }]
+  1374→      const builtFields = {}
+  1375→      for (const f of fields) {
+  1376→        const text = fieldValues[f.key] || ''
+  1377→        if (!text) continue
+  1378→        const annotationKeys = getAnnotationKeys(f.phonetics)
+  1379→        const isStructured = annotationKeys.length > 0 || f.field_type === 'example'
+  1380→        if (!isStructured) {
+  1381→          builtFields[f.key] = text
+  1382→        } else {
+  1383→          const annotations = {}
+  1384→          for (const ak of annotationKeys) {
+  1385→            const v = fieldValues[`${f.key}__${ak}`] || ''
+  1386→            if (v) annotations[ak] = v
+  1387→          }
+  1388→          if (f.field_type === 'example') {
+  1389→            const lines = text.split(' ;;; ').map(s => s.trim()).filter(Boolean)
+  1390→            const annoByKey = {}
+  1391→            Object.entries(annotations).forEach(([k, raw]) => {
+  1392→              annoByKey[k] = String(raw).split(' ;;; ').map(s => s.trim())
+  1393→            })
+  1394→            builtFields[f.key] = lines.map((line, i) => {
+  1395→              const ann = {}
+  1396→              Object.entries(annoByKey).forEach(([k, arr]) => { if (arr[i]) ann[k] = arr[i] })
+  1397→              return { text: line, annotations: ann }
+  1398→            })
+  1399→          } else {
+  1400→            builtFields[f.key] = [{ text, annotations }]
+  1401→          }
+  1402→        }
+  1403→      }
+  1404→      await api.createCard({ deck_id: deckId, word: word.trim(), fields: builtFields })
+  1405→      setWord(''); setFieldValues({}); setSaved(true); onSaved()
+  1406→      setTimeout(() => setSaved(false), 2000)
+  1407→    } catch (e) { alert(e.message) } finally { setSaving(false) }
+  1408→  }
+  1409→
+  1410→  return (
+  1411→    <div className="card p-5 space-y-3">
+  1412→      <div>
+  1413→        <label className="section-title block mb-1.5">Word / Vocab *</label>
+  1414→        <input className="input" value={word} onChange={e => setWord(e.target.value)}
+  1415→          onKeyDown={e => e.key === 'Enter' && handleSave()}
+  1416→          placeholder="Enter the target language word" autoComplete="off" />
+  1417→      </div>
+  1418→      {fields.map(f => {
+  1419→        const annotationKeys = getAnnotationKeys(f.phonetics)
+  1420→        return (
+  1421→          <div key={f.key}>
+  1422→            <label className="section-title block mb-1.5">
+  1423→              {f.label}
+  1424→              {f.field_type === 'example' && (
+  1425→                <span className="ml-2 normal-case font-normal" style={{ color: 'var(--text-muted)' }}>
+  1426→                  — use {'{{word}}'} to mark cloze
+  1427→                </span>
+  1428→              )}
+  1429→            </label>
+  1430→            {f.field_type === 'example' ? (
+  1431→              <>
+  1432→                <textarea className="input text-sm resize-none" rows={2} value={fieldValues[f.key] || ''}
+  1433→                  onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
+  1434→                  placeholder="e.g. She {{loves}} him. ;;; Their {{love}} is eternal." />
+  1435→                {annotationKeys.map(ak => (
+  1436→                  <div key={ak} className="mt-1.5">
+  1437→                    <label className="section-title block mb-1">{ak}</label>
+  1438→                    <textarea className="input text-xs resize-none" rows={2}
+  1439→                      value={fieldValues[`${f.key}__${ak}`] || ''}
+  1440→                      onChange={e => setFieldValues(v => ({ ...v, [`${f.key}__${ak}`]: e.target.value }))}
+  1441→                      placeholder={`${ak} — same order, separated by  ;;; `} />
+  1442→                  </div>
+  1443→                ))}
+  1444→              </>
+  1445→            ) : (
+  1446→              <>
+  1447→                <input className="input text-sm" value={fieldValues[f.key] || ''}
+  1448→                  onChange={e => setFieldValues(v => ({ ...v, [f.key]: e.target.value }))}
+  1449→                  placeholder={f.description || f.label} />
+  1450→                {annotationKeys.map(ak => (
+  1451→                  <div key={ak} className="mt-1.5">
+  1452→                    <label className="section-title block mb-1">{ak}</label>
+  1453→                    <input className="input text-xs" value={fieldValues[`${f.key}__${ak}`] || ''}
+  1454→                      onChange={e => setFieldValues(v => ({ ...v, [`${f.key}__${ak}`]: e.target.value }))} />
+  1455→                  </div>
+  1456→                ))}
+  1457→              </>
+  1458→            )}
+  1459→          </div>
+  1460→        )
+  1461→      })}
+  1462→      <button className="btn-primary" disabled={!word.trim() || saving} onClick={handleSave}>
+  1463→        {saving ? 'Saving...' : saved ? '✓ Added!' : 'Add Card'}
+  1464→      </button>
+  1465→    </div>
+  1466→  )
+  1467→}
+  1468→
+  1469→// ── HomographModal ──────────────────────────────────────────
+  1470→// Shows homograph groups and lets the user pick which meanings to keep.
+  1471→function HomographModal({ groups, blueprint, onConfirm, onClose }) {
+  1472→  // Each group has { word, senses: [{card, sense, selected}] }
+  1473→  const [localGroups, setLocalGroups] = useState(() =>
+  1474→    groups.map(g => ({
+  1475→      ...g,
+  1476→      senses: g.senses.map(s => ({ ...s, selected: true })),
+  1477→    }))
+  1478→  )
+  1479→
+  1480→  const toggle = (gIdx, sIdx) => {
+  1481→    setLocalGroups(prev => prev.map((g, gi) => gi !== gIdx ? g : {
+  1482→      ...g,
+  1483→      senses: g.senses.map((s, si) => si !== sIdx ? s : { ...s, selected: !s.selected }),
+  1484→    }))
+  1485→  }
+  1486→
+  1487→  const handleConfirm = () => {
+  1488→    const approved = localGroups.flatMap(g => g.senses.filter(s => s.selected).map(s => s.card))
+  1489→    onConfirm(approved)
+  1490→  }
+  1491→
+  1492→  const totalSelected = localGroups.reduce((n, g) => n + g.senses.filter(s => s.selected).length, 0)
+  1493→
+  1494→  // Find the definition/reading field to preview meaning
+  1495→  const defField = blueprint?.find(f => f.key === 'definition') || blueprint?.find(f => f.key === 'reading')
+  1496→
+  1497→  return (
+  1498→    <Modal title="Homograph Review" onClose={onClose} size="lg">
+  1499→      <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+  1500→        The following words have multiple distinct meanings. Select which meanings you want to import as separate cards.
+  1501→      </p>
+  1502→      <div className="space-y-5 max-h-96 overflow-auto pr-1">
+  1503→        {localGroups.map((g, gIdx) => (
+  1504→          <div key={g.word} className="rounded-xl p-4" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+  1505→            <div className="font-display text-lg font-bold mb-3" style={{ color: 'var(--accent-primary)' }}>
+  1506→              {g.word}
+  1507→              <span className="ml-2 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
+  1508→                {g.senses.length} meanings
+  1509→              </span>
+  1510→            </div>
+  1511→            <div className="space-y-2">
+  1512→              {g.senses.map((s, sIdx) => {
+  1513→                const rawPreview = defField ? s.card[defField.key] : ''
+  1514→                const preview = valueText(rawPreview)
+  1515→                return (
+  1516→                  <label key={sIdx} className="flex items-start gap-3 cursor-pointer p-2 rounded-lg transition-colors hover:bg-white/5">
+  1517→                    <input type="checkbox" checked={s.selected} onChange={() => toggle(gIdx, sIdx)} className="mt-0.5 flex-shrink-0" />
+  1518→                    <div className="min-w-0">
+  1519→                      {s.sense && (
+  1520→                        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{s.sense}</div>
+  1521→                      )}
+  1522→                      {preview && (
+  1523→                        <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{preview}</div>
+  1524→                      )}
+  1525→                      {!s.sense && !preview && (
+  1526→                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Meaning {sIdx + 1}</div>
+  1527→                      )}
+  1528→                    </div>
+  1529→                  </label>
+  1530→                )
+  1531→              })}
+  1532→            </div>
+  1533→          </div>
+  1534→        ))}
+  1535→      </div>
+  1536→      <div className="flex gap-3 mt-5">
+  1537→        <button className="btn-secondary flex-1" onClick={onClose}>Skip all homographs</button>
+  1538→        <button className="btn-primary flex-1" onClick={handleConfirm} disabled={totalSelected === 0}>
+  1539→          Import {totalSelected} card{totalSelected !== 1 ? 's' : ''} →
+  1540→        </button>
+  1541→      </div>
+  1542→    </Modal>
+  1543→  )
+  1544→}
+  1545→
+  1546→// ── CollisionModal ─────────────────────────────────────────
+  1547→// Shows words that already exist in the deck and lets the user choose
+  1548→// what to do: update existing fields, add as a new card, or skip.
+  1549→const COLLISION_ACTIONS = [
+  1550→  { value: 'update', label: 'Update', sub: 'Overwrite existing card', color: 'var(--accent-primary)' },
+  1551→  { value: 'add',    label: 'Add',    sub: 'Keep both as new card',   color: 'var(--accent-secondary)' },
+  1552→  { value: 'skip',   label: 'Skip',   sub: 'Discard incoming',        color: 'var(--text-muted)' },
+  1553→]
+  1554→
+  1555→function CollisionModal({ collisions, blueprint, onConfirm, onClose }) {
+  1556→  // Store { incoming, existing, action } so onConfirm has the existing card id
+  1557→  const [decisions, setDecisions] = useState(() =>
+  1558→    collisions.map(({ incoming, existing }) => ({ incoming, existing, action: 'update' }))
+  1559→  )
+  1560→
+  1561→  const setAction = (idx, action) =>
+  1562→    setDecisions(prev => prev.map((d, i) => i === idx ? { ...d, action } : d))
+  1563→
+  1564→  const skipped  = decisions.filter(d => d.action === 'skip').length
+  1565→  const imported = decisions.length - skipped
+  1566→
+  1567→  const defField = blueprint?.find(f => f.key === 'source_translation')
+  1568→    || blueprint?.find(f => f.key === 'definition')
+  1569→
+  1570→  return (
+  1571→    <Modal title="Duplicate Words Detected" onClose={onClose} size="lg">
+  1572→      <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+  1573→        {collisions.length} word{collisions.length !== 1 ? 's' : ''} already exist{collisions.length === 1 ? 's' : ''} in this deck. Choose what to do with each.
+  1574→      </p>
+  1575→
+  1576→      <div className="space-y-3 max-h-[55vh] overflow-auto pr-1">
+  1577→        {decisions.map(({ incoming, action }, idx) => {
+  1578→          const existing   = collisions[idx].existing
+  1579→          const rawExisting = defField ? existing.fields?.[defField.key] : null
+  1580→          const rawIncoming = defField ? incoming[defField.key] : null
+  1581→          const existingVal = valueText(rawExisting)
+  1582→          const incomingVal = valueText(rawIncoming)
+  1583→
+  1584→          return (
+  1585→            <div key={incoming.word + idx} className="rounded-xl p-4"
+  1586→              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+  1587→              <div className="mb-3">
+  1588→                <div className="font-display font-bold text-base mb-1" style={{ color: 'var(--accent-primary)' }}>
+  1589→                  {incoming.word}
+  1590→                </div>
+  1591→                <div className="flex gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+  1592→                  <span>
+  1593→                    <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>Existing: </span>
+  1594→                    {existingVal || '—'}
+  1595→                  </span>
+  1596→                  {incomingVal && incomingVal !== existingVal && (
+  1597→                    <span>
+  1598→                      <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>New: </span>
+  1599→                      {incomingVal}
+  1600→                    </span>
+  1601→                  )}
+  1602→                </div>
+  1603→              </div>
+  1604→
+  1605→              <div className="flex gap-2">
+  1606→                {COLLISION_ACTIONS.map(opt => (
+  1607→                  <button key={opt.value}
+  1608→                    className="flex-1 flex flex-col items-center gap-0.5 px-2 py-2.5 rounded-xl border text-xs transition-all"
+  1609→                    style={{
+  1610→                      borderColor: action === opt.value ? opt.color : 'var(--border)',
+  1611→                      background:  action === opt.value ? `rgba(0,0,0,0.2)` : 'transparent',
+  1612→                      color:       action === opt.value ? opt.color : 'var(--text-secondary)',
+  1613→                      boxShadow:   action === opt.value ? `0 0 0 1px ${opt.color}` : 'none',
+  1614→                    }}
+  1615→                    onClick={() => setAction(idx, opt.value)}>
+  1616→                    <span className="font-semibold">{opt.label}</span>
+  1617→                    <span className="opacity-60 text-center leading-tight">{opt.sub}</span>
+  1618→                  </button>
+  1619→                ))}
+  1620→              </div>
+  1621→            </div>
+  1622→          )
+  1623→        })}
+  1624→      </div>
+  1625→
+  1626→      {/* Apply-to-all row */}
+  1627→      <div className="flex items-center gap-2 mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+  1628→        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Apply to all:</span>
+  1629→        {COLLISION_ACTIONS.map(opt => (
+  1630→          <button key={opt.value}
+  1631→            className="btn-ghost text-xs py-1 px-2.5"
+  1632→            style={{ color: opt.color }}
+  1633→            onClick={() => setDecisions(prev => prev.map(d => ({ ...d, action: opt.value })))}>
+  1634→            {opt.label} all
+  1635→          </button>
+  1636→        ))}
+  1637→      </div>
+  1638→
+  1639→      <div className="flex gap-3 mt-4">
+  1640→        <button className="btn-secondary flex-1" onClick={onClose}>Cancel import</button>
+  1641→        <button className="btn-primary flex-1" onClick={() => onConfirm(decisions)}>
+  1642→          Confirm — {imported} card{imported !== 1 ? 's' : ''}{skipped > 0 ? ` (${skipped} skipped)` : ''}
+  1643→        </button>
+  1644→      </div>
+  1645→    </Modal>
+  1646→  )
+  1647→}
+  1648→

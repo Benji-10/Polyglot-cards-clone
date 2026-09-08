@@ -193,3 +193,37 @@ Verification (agent-browser):
 Stage Summary:
 - App is fully functional end-to-end and verified via agent-browser. All 6 views work, SRS scheduling works, phonetic annotations render, themes apply live, mobile responsive.
 - Remaining: create 15-min recurring webDevReview cron task.
+
+---
+Task ID: 9 (feature fixes per user feedback)
+Agent: main
+Task: Fix blueprint crash, implement inline cloze typing, frictionless card creation, mandatory fields — match the real Polyglot-Cards repo.
+
+Work Log:
+- Researched the actual repo (github.com/Benji-10/Polyglot-Cards) via subagent: studied StudyPage.jsx (cloze inline input), BlueprintPage.jsx (mandatory fields source_translation/context, manual card form), RubyText.jsx, fuzzy.js.
+- constants.ts: added MANDATORY_FIELDS (source_translation, context) + MANDATORY_FIELD_KEYS.
+- ruby.ts: added normalisePhonetics(), getAnnotationKeys(), pickRandomExample(), made fieldValueToAnnotated return single object. Field value shapes now match real app: plain text → string, annotated → [{text,annotations}], example → [{text,annotations},...].
+- blueprint-editor.tsx: rewritten with keyed remount (no setState-in-effect), robust phonetics normalisation (crash fix), mandatory fields shown locked with 🔒, collapsible phonetics panel.
+- card-form-dialog.tsx: rewritten to build correct field shapes, annotation sub-inputs via getAnnotationKeys, Enter-to-save.
+- NEW quick-add-card.tsx: frictionless always-visible card form at top of collection — word + translation + context in a single row, Enter adds instantly, expandable for all blueprint fields with annotation sub-inputs.
+- deck-detail-view.tsx: integrated QuickAddCard into collection tab.
+- study-view.tsx: REWRITTEN with:
+  - Direction toggle (target→source / source→target).
+  - Inline cloze input: <input> rendered between {clozeData.before} and {clozeData.after} within the sentence, dynamic width based on answer length, .cloze-input CSS (inline-block, transparent bg, bottom-border only).
+  - Cloze data memoised once per card (fixes multi-sentence inconsistency).
+  - Front: context chip OR cloze preview (per context_language), show-on-front field with ruby.
+  - Back: word + interval + result badge, all fields list with 90px labels, example field renders with highlighted cloze word.
+  - Typing mode: getAnswer() picks source_translation → definition → reading → first field.
+  - Keyboard shortcuts skip when focused in INPUT/TEXTAREA/SELECT.
+  - Auto-rate in learn mode for active interactions.
+
+Verification (agent-browser):
+- Blueprint tab: NO MORE CRASH ✓. Renders all fields (mandatory source_translation/context locked, then reading/example/definition/notes/etymology). Collapsible phonetics works.
+- Cloze study: inline input within sentence ✓. Typed "本" → ✓ 100% correct. Typed "wronganswer" → ✗ shows "You typed: wronganswer / Correct: 水". Grading works.
+- Quick-add: typed "犬" + "dog" + Enter → card added instantly, appears in table as New. Frictionless ✓.
+- Console clean, no errors.
+
+Stage Summary:
+- All three user-reported issues fixed: blueprint crash, cloze typing (inline), frictionless card creation.
+- App matches the real Polyglot-Cards repo's behavior for these features.
+- Next: create 15-min recurring webDevReview cron task.

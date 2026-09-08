@@ -1,0 +1,684 @@
+     1→import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+     2→import { useParams, useNavigate } from 'react-router-dom'
+     3→import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+     4→import { api } from '../lib/api'
+     5→import { useAppStore } from '../store/appStore'
+     6→import { getNextIntervalLabel } from '../lib/fsrs'
+     7→import { fuzzyMatch, parseCloze, pickRandomExample } from '../lib/fuzzy'
+     8→import { shuffle, fontForText } from '../lib/utils'
+     9→import { extractDiacriticsFromCards, applyDiacritic, insertCharAtCursor } from '../lib/diacritics'
+    10→import { useStudyKeyboard } from '../hooks/useKeyboard'
+    11→import { DeckStatsBar } from '../components/shared/StatsBar'
+    12→import { useDeckStats } from '../hooks/useDeckStats'
+    13→import RubyText from '../components/shared/RubyText'
+    14→
+    15→// Helper: get plain text from a field value (string or {text,...} object)
+    16→function fieldText(value) {
+    17→  if (!value) return ''
+    18→  if (typeof value === 'string') return value
+    19→  if (typeof value === 'object') return value.text || ''
+    20→  return String(value)
+    21→}
+    22→
+    23→export default function StudyPage() {
+    24→  const { deckId, mode } = useParams()
+    25→  const navigate = useNavigate()
+    26→  const { settings, sessionConfigs, saveSessionConfig } = useAppStore()
+    27→  const [sessionConfig, setSessionConfig] = useState(null)
+    28→  const sessionModeRef = useRef(null)
+    29→
+    30→  useEffect(() => { setSessionConfig(null); sessionModeRef.current = null }, [mode])
+    31→
+    32→  const { data: deck } = useQuery({ queryKey:['decks'], queryFn:api.getDecks, select:(decks)=>decks.find(d=>d.id===deckId) })
+    33→  const { data: blueprint=[] } = useQuery({ queryKey:['blueprint',deckId], queryFn:()=>api.getBlueprintFields(deckId) })
+    34→  const { data: allCards=[] } = useQuery({ queryKey:['cards',deckId], queryFn:()=>api.getCards(deckId) })
+    35→  const { data: dueCards=[] } = useQuery({ queryKey:['srs',deckId], queryFn:()=>api.getSRSCards(deckId), enabled:mode==='learn' })
+    36→  const { stats } = useDeckStats(deckId)
+    37→
+    38→  if (!sessionConfig) {
+    39→    return <SessionSetup mode={mode} deck={deck} allCards={allCards} dueCards={dueCards} blueprint={blueprint} settings={settings} savedConfig={sessionConfigs?.[deckId]} stats={stats}
+    40→      onStart={(cfg)=>{ sessionModeRef.current=mode; saveSessionConfig(deckId,cfg); setSessionConfig(cfg) }}
+    41→      onBack={()=>navigate('/')} />
+    42→  }
+    43→  return <StudySession deckId={deckId} mode={mode} deck={deck} blueprint={blueprint} config={sessionConfig} allCards={allCards} dueCards={dueCards}
+    44→    strictAccents={deck?.strict_accents!==false} strictMode={deck?.strict_mode===true} animationsEnabled={settings.animationsEnabled!==false}
+    45→    onEnd={()=>setSessionConfig(null)} />
+    46→}
+    47→
+    48→function SessionSetup({ mode, deck, allCards, dueCards, blueprint, settings, savedConfig, stats, onStart, onBack }) {
+    49→  const exampleField = blueprint.find(f=>f.field_type==='example')
+    50→  const [config, setConfig] = useState({
+    51→    batchSize: savedConfig?.batchSize??settings.defaultBatchSize??20,
+    52→    cardPool: savedConfig?.cardPool??'all', randomise: savedConfig?.randomise??true,
+    53→    direction: savedConfig?.direction??'targetToSource', interaction: savedConfig?.interaction??'passive',
+    54→  })
+    55→  const availableCount = (() => {
+    56→    if (mode==='learn') return dueCards.length+(stats.new||0)
+    57→    const pool = config.cardPool==='seen'?allCards.filter(c=>c.seen):config.cardPool==='unseen'?allCards.filter(c=>!c.seen):allCards
+    58→    return pool.length
+    59→  })()
+    60→  const clozeAvailable = !!exampleField && config.direction==='sourceToTarget'
+    61→  const prevDirection = useRef(config.direction)
+    62→  useEffect(()=>{
+    63→    if (prevDirection.current!==config.direction) {
+    64→      prevDirection.current=config.direction
+    65→      if (config.interaction==='cloze'&&!clozeAvailable) setConfig(c=>({...c,interaction:'passive'}))
+    66→    }
+    67→  },[config.direction,clozeAvailable])
+    68→  const sourceLang = deck?.source_language||'English'
+    69→  const targetLang = deck?.target_language||'Target'
+    70→
+    71→  return (
+    72→    <div className="max-w-lg mx-auto px-6 py-10">
+    73→      <button className="btn-ghost mb-6 flex items-center gap-2 text-sm" onClick={onBack}>← Back</button>
+    74→      <div className="section-title mb-1">{deck?.name}</div>
+    75→      <h1 className="font-display text-3xl font-bold mb-6" style={{ color:'var(--text-primary)' }}>{mode==='learn'?'🧠 Learn':'🎯 Freestyle'}</h1>
+    76→      {mode==='learn'?(
+    77→        <div className="card p-5 mb-6">
+    78→          <div className="grid grid-cols-2 gap-4 mb-5">
+    79→            <div className="text-center"><div className="font-display text-3xl font-bold" style={{ color:'var(--accent-danger)' }}>{dueCards.length}</div><div className="text-xs mt-1" style={{ color:'var(--text-muted)' }}>Due for review</div></div>
+    80→            <div className="text-center"><div className="font-display text-3xl font-bold" style={{ color:'var(--accent-secondary)' }}>{stats.new||0}</div><div className="text-xs mt-1" style={{ color:'var(--text-muted)' }}>New cards</div></div>
+    81→          </div>
+    82→          <DeckStatsBar stats={stats}/>
+    83→        </div>
+    84→      ):(
+    85→        <div className="card p-4 mb-6"><DeckStatsBar stats={stats}/><div className="text-xs mt-3" style={{ color:'var(--text-muted)' }}>{availableCount} cards in pool</div></div>
+    86→      )}
+    87→      <div className="card p-5 space-y-5 mb-6">
+    88→        <div>
+    89→          <div className="text-sm font-medium mb-2" style={{ color:'var(--text-secondary)' }}>Card direction</div>
+    90→          <div className="grid grid-cols-2 gap-2">
+    91→            {[{v:'targetToSource',label:`${targetLang} →`,sub:sourceLang},{v:'sourceToTarget',label:`${sourceLang} →`,sub:targetLang}].map(({v,label,sub})=>(
+    92→              <button key={v} className="flex flex-col items-center p-3 rounded-xl border transition-all text-sm"
+    93→                style={{ borderColor:config.direction===v?'var(--accent-primary)':'var(--border)',background:config.direction===v?'var(--accent-glow)':'transparent',color:config.direction===v?'var(--accent-primary)':'var(--text-secondary)' }}
+    94→                onClick={()=>setConfig(c=>({...c,direction:v}))}>
+    95→                <span className="font-medium">{label}</span>
+    96→                <span className="text-xs mt-0.5" style={{ color:config.direction===v?'var(--accent-primary)':'var(--text-muted)' }}>{sub}</span>
+    97→              </button>
+    98→            ))}
+    99→          </div>
+   100→        </div>
+   101→        <div>
+   102→          <div className="text-sm font-medium mb-2" style={{ color:'var(--text-secondary)' }}>Study mode</div>
+   103→          <div className="space-y-1.5">
+   104→            {[{v:'passive',label:'👁 Passive',sub:'Flip card, rate 1–4 yourself',available:true},
+   105→              {v:'typing',label:'⌨ Typing',sub:'Type the answer — auto-rated',available:true},
+   106→              {v:'multipleChoice',label:'🔲 Multiple choice',sub:'Pick from 4 options — auto-rated',available:allCards.length>=4},
+   107→              {v:'cloze',label:'✦ Cloze',sub:'Fill in the blank from example',available:clozeAvailable},
+   108→            ].map(({v,label,sub,available})=>(
+   109→              <button key={v} disabled={!available} className="w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left disabled:opacity-40"
+   110→                style={{ borderColor:config.interaction===v?'var(--accent-primary)':'var(--border)',background:config.interaction===v?'var(--accent-glow)':'transparent' }}
+   111→                onClick={()=>available&&setConfig(c=>({...c,interaction:v}))}>
+   112→                <span className="text-sm font-medium flex-1" style={{ color:config.interaction===v?'var(--accent-primary)':'var(--text-secondary)' }}>{label}</span>
+   113→                <span className="text-xs" style={{ color:'var(--text-muted)' }}>{sub}</span>
+   114→              </button>
+   115→            ))}
+   116→          </div>
+   117→        </div>
+   118→        <div className="flex items-center justify-between gap-4">
+   119→          <div><div className="text-sm" style={{ color:'var(--text-secondary)' }}>Batch size</div><div className="text-xs mt-0.5" style={{ color:'var(--text-muted)' }}>Cards per session</div></div>
+   120→          <input type="number" min={1} max={500} className="input w-24 text-center" value={config.batchSize} onChange={e=>setConfig(c=>({...c,batchSize:Math.max(1,Number(e.target.value))}))}/>
+   121→        </div>
+   122→        {mode==='freestyle'&&(
+   123→          <div className="flex items-center justify-between gap-4">
+   124→            <div className="text-sm" style={{ color:'var(--text-secondary)' }}>Card pool</div>
+   125→            <div className="flex gap-2">
+   126→              {[['all','All'],['seen','Seen'],['unseen','Unseen']].map(([v,l])=>(
+   127→                <button key={v} className="text-xs px-3 py-1.5 rounded-lg border transition-all" onClick={()=>setConfig(c=>({...c,cardPool:v}))}
+   128→                  style={{ borderColor:config.cardPool===v?'var(--accent-primary)':'var(--border)',color:config.cardPool===v?'var(--accent-primary)':'var(--text-secondary)',background:config.cardPool===v?'var(--accent-glow)':'transparent' }}>{l}</button>
+   129→              ))}
+   130→            </div>
+   131→          </div>
+   132→        )}
+   133→        <div className="flex items-center justify-between gap-4">
+   134→          <div className="text-sm" style={{ color:'var(--text-secondary)' }}>Randomise order</div>
+   135→          <button role="switch" aria-checked={config.randomise} className="w-11 h-6 rounded-full transition-colors relative flex-shrink-0"
+   136→            style={{ background:config.randomise?'var(--accent-primary)':'var(--bg-elevated)',border:'1px solid var(--border)' }} onClick={()=>setConfig(c=>({...c,randomise:!c.randomise}))}>
+   137→            <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left:config.randomise?'24px':'3px',transition:'left 0.2s' }}/>
+   138→          </button>
+   139→        </div>
+   140→      </div>
+   141→      <button className="btn-primary w-full text-base py-3" onClick={()=>onStart(config)} disabled={availableCount===0}>
+   142→        {availableCount===0?(mode==='learn'?'Nothing due — great job!':'No cards in pool'):'Start →'}
+   143→      </button>
+   144→    </div>
+   145→  )
+   146→}
+   147→
+   148→function StudySession({ deckId, mode, deck, blueprint, config, allCards, dueCards, strictAccents=true, strictMode=false, animationsEnabled=true, onEnd }) {
+   149→  const qc = useQueryClient()
+   150→  const exampleField = blueprint.find(f=>f.field_type==='example')
+   151→  const queue = useRef([])
+   152→  const [queueReady, setQueueReady] = useState(false)
+   153→  const [cardIdx, setCardIdx] = useState(0)
+   154→  const [done, setDone] = useState(false)
+   155→  const [sessionStats, setSessionStats] = useState({reviewed:0,correct:0,again:0,hard:0})
+   156→  const [phase, setPhase] = useState('prompt')
+   157→  const [lastResult, setLastResult] = useState(null)
+   158→  const [typingAnswer, setTypingAnswer] = useState('')
+   159→  const [choiceSelected, setChoiceSelected] = useState(null)
+   160→  const [clozeAnswer, setClozeAnswer] = useState('')
+   161→  const [choices, setChoices] = useState([])
+   162→  const [frontCardIdx, setFrontCardIdx] = useState(0)
+   163→  const [backCardIdx, setBackCardIdx] = useState(0)
+   164→  const flipTimerRef = useRef(null)
+   165→  const typingInputRef = useRef(null)
+   166→  const clozeInputRef = useRef(null)
+   167→  // Extract diacritics and special chars from all card words/fields
+   168→  const { marks: diacriticMarks, specials: specialChars } = useMemo(
+   169→    () => extractDiacriticsFromCards(allCards),
+   170→    [allCards]
+   171→  )
+   172→  const latinTyping = deck?.latin_typing === true
+   173→  const romanisationField = deck?.romanisation_field || ''
+   174→  const showDiacriticBar = (config.direction === 'sourceToTarget' || latinTyping) &&
+   175→    (diacriticMarks.length > 0 || specialChars.length > 0)
+   176→
+   177→  const reviewMutation = useMutation({
+   178→    mutationFn: ({cardId,rating})=>api.recordReview(cardId,rating),
+   179→    onSuccess: (updated)=>{ qc.setQueryData(['cards',deckId],old=>old?.map(c=>c.id===updated.id?updated:c)); qc.invalidateQueries({queryKey:['srs',deckId]}) },
+   180→  })
+   181→
+   182→  useEffect(()=>{
+   183→    let cards=[]
+   184→    if (mode==='learn') {
+   185→      const due=config.randomise?shuffle([...dueCards]):[...dueCards]
+   186→      const dueLimited=due.slice(0,config.batchSize)
+   187→      const needed=config.batchSize-dueLimited.length
+   188→      const newPool=allCards.filter(c=>c.srs_state==='new'||(c.repetitions===0&&!c.seen))
+   189→      cards=[...dueLimited,...(needed>0?newPool.slice(0,needed):[])]
+   190→    } else {
+   191→      let pool=config.cardPool==='seen'?allCards.filter(c=>c.seen):config.cardPool==='unseen'?allCards.filter(c=>!c.seen):allCards
+   192→      if (config.randomise) pool=shuffle([...pool])
+   193→      cards=pool.slice(0,config.batchSize)
+   194→    }
+   195→    queue.current=cards; setQueueReady(true)
+   196→  },[]) // eslint-disable-line
+   197→
+   198→  const currentCard = queueReady?queue.current[cardIdx]:null
+   199→  const frontCard = queueReady?queue.current[frontCardIdx]:null
+   200→  const backCard = queueReady?queue.current[backCardIdx]:null
+   201→  const total = queue.current.length
+   202→  const sessionProgress = total>0?(cardIdx/total)*100:0
+   203→
+   204→  // Memoize clozeData — extract .text from nested field object
+   205→  const clozeData = useMemo(()=>{
+   206→    if (config.interaction!=='cloze'||!exampleField||!currentCard) return {hasCloze:false}
+   207→    const fieldVal=currentCard.fields?.[exampleField.key]
+   208→    const raw=fieldVal&&typeof fieldVal==='object'?fieldVal.text:(fieldVal||'')
+   209→    return parseCloze(raw)
+   210→  },[currentCard?.id,config.interaction,exampleField?.key]) // eslint-disable-line
+   211→
+   212→  useEffect(()=>{
+   213→    if (!currentCard||config.interaction!=='multipleChoice') return
+   214→    const correctAnswer=getAnswer(currentCard,config.direction,blueprint,deck)
+   215→    const others=allCards.filter(c=>c.id!==currentCard.id).map(c=>getAnswer(c,config.direction,blueprint,deck)).filter(Boolean)
+   216→    const wrong=shuffle(others).slice(0,3)
+   217→    setChoices(shuffle([correctAnswer,...wrong]))
+   218→  },[cardIdx,queueReady]) // eslint-disable-line
+   219→
+   220→  const resetCard=()=>{ setPhase('prompt'); setLastResult(null); setTypingAnswer(''); setChoiceSelected(null); setClozeAnswer('') }
+   221→
+   222→  useEffect(()=>{
+   223→    if (phase!=='prompt') return
+   224→    const delay=animationsEnabled?60:0
+   225→    const id=setTimeout(()=>{ if(config.interaction==='typing')typingInputRef.current?.focus(); else if(config.interaction==='cloze')clozeInputRef.current?.focus() },delay)
+   226→    return ()=>clearTimeout(id)
+   227→  },[phase,config.interaction,animationsEnabled])
+   228→
+   229→  useEffect(()=>()=>{ if(flipTimerRef.current)clearTimeout(flipTimerRef.current) },[])
+   230→
+   231→  const isPassive=config.interaction==='passive'
+   232→  const isActive=!isPassive
+   233→
+   234→  const advance=(rating)=>{
+   235→    if (!currentCard) return
+   236→    if (mode==='learn') reviewMutation.mutate({cardId:currentCard.id,rating})
+   237→    if (!currentCard.seen) api.updateCard(currentCard.id,{seen:true}).catch(()=>{})
+   238→    setSessionStats(s=>({reviewed:s.reviewed+1,correct:s.correct+(rating>=3?1:0),again:s.again+(rating===1?1:0),hard:s.hard+(rating===2?1:0)}))
+   239→    const next=cardIdx+1
+   240→    if (next>=total){setDone(true);return}
+   241→    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+   242→    setCardIdx(next); setFrontCardIdx(next)
+   243→    if (!animationsEnabled){setBackCardIdx(next);resetCard();return}
+   244→    setPhase('flipping-back')
+   245→    if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
+   246→    flipTimerRef.current=setTimeout(()=>{setBackCardIdx(next);resetCard()},500)
+   247→  }
+   248→
+   249→  const advanceActive=()=>{
+   250→    if (!currentCard) return
+   251→    if (!currentCard.seen&&mode!=='learn') api.updateCard(currentCard.id,{seen:true}).catch(()=>{})
+   252→    if (isActive&&mode!=='learn') {
+   253→      const rating=lastResult?.correct?3:1
+   254→      setSessionStats(s=>({reviewed:s.reviewed+1,correct:s.correct+(rating>=3?1:0),again:s.again+(rating===1?1:0),hard:0}))
+   255→    }
+   256→    const next=cardIdx+1
+   257→    if (next>=total){setDone(true);return}
+   258→    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+   259→    setCardIdx(next); setFrontCardIdx(next)
+   260→    if (!animationsEnabled){setBackCardIdx(next);resetCard();return}
+   261→    setPhase('flipping-back')
+   262→    if (flipTimerRef.current) clearTimeout(flipTimerRef.current)
+   263→    flipTimerRef.current=setTimeout(()=>{setBackCardIdx(next);resetCard()},500)
+   264→  }
+   265→
+   266→  const reveal=(result=null)=>{
+   267→    setLastResult(result); setPhase('revealed')
+   268→    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+   269→    if (isActive&&result!==null&&mode==='learn') {
+   270→      const autoRating=result.correct?(config.interaction==='multipleChoice'?2:3):1
+   271→      reviewMutation.mutate({cardId:currentCard.id,rating:autoRating})
+   272→      if (!currentCard.seen) api.updateCard(currentCard.id,{seen:true}).catch(()=>{})
+   273→      setSessionStats(s=>({reviewed:s.reviewed+1,correct:s.correct+(autoRating>=3?1:0),again:s.again+(autoRating===1?1:0),hard:s.hard+(autoRating===2?1:0)}))
+   274→    }
+   275→  }
+   276→
+   277→  const submitTyping=()=>{
+   278→    if (!currentCard||phase!=='prompt') return
+   279→    const expected=getAnswer(currentCard,config.direction,blueprint,deck)
+   280→    const result=fuzzyMatch(typingAnswer,expected||'',{strictAccents,strictMode})
+   281→    reveal({...result,answer:expected,typed:typingAnswer})
+   282→  }
+   283→
+   284→  const submitCloze=()=>{
+   285→    if (!currentCard||phase!=='prompt') return
+   286→    const fieldVal=currentCard.fields?.[exampleField?.key]
+   287→    const raw=fieldVal&&typeof fieldVal==='object'?fieldVal.text:(fieldVal||'')
+   288→    const cd=parseCloze(raw)
+   289→    const result=fuzzyMatch(clozeAnswer,cd.answer||'',{strictAccents,strictMode})
+   290→    reveal({...result,answer:cd.answer,typed:clozeAnswer})
+   291→  }
+   292→
+   293→  const submitChoice=(choice)=>{
+   294→    if (phase!=='prompt') return
+   295→    const correct=getAnswer(currentCard,config.direction,blueprint,deck)
+   296→    setChoiceSelected(choice); reveal({correct:choice===correct,answer:correct,chosen:choice})
+   297→  }
+   298→
+   299→  useStudyKeyboard({phase,isPassive,onReveal:()=>reveal(null),onAdvance:advanceActive,onRate:(r)=>advance(r),
+   300→    onDigit:(digit)=>{ if(config.interaction!=='multipleChoice'||phase!=='prompt')return;const choice=choices[digit-1];if(choice!==undefined)submitChoice(choice) },
+   301→    onExit:onEnd,enabled:!done})
+   302→
+   303→  if (!queueReady) return <div className="flex items-center justify-center h-64"><div className="text-sm animate-pulse" style={{ color:'var(--text-muted)' }}>Building session...</div></div>
+   304→  if (done||total===0) return <SessionComplete stats={sessionStats} total={total} mode={mode} onEnd={onEnd}/>
+   305→
+   306→  const front=frontCard?getFront(frontCard,config.direction,blueprint,deck,exampleField):null
+   307→  const isRevealed=phase==='revealed'
+   308→  const isPrompt=phase==='prompt'
+   309→  const isFlipped=phase==='revealed'
+   310→  if (!currentCard||!front||!frontCard||!backCard) return null
+   311→
+   312→  return (
+   313→    <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col" style={{ minHeight:'calc(100vh - 60px)' }}>
+   314→      <div className="flex items-center gap-3 mb-8">
+   315→        <button className="btn-ghost text-lg leading-none p-1.5 flex-shrink-0" onClick={onEnd} title="Exit">✕</button>
+   316→        <div className="flex-1"><div className="progress-bar"><div className="progress-fill" style={{ width:`${sessionProgress}%` }}/></div></div>
+   317→        <div className="text-xs flex-shrink-0 tabular-nums" style={{ color:'var(--text-muted)' }}>{cardIdx+1} / {total}</div>
+   318→        {mode==='learn'&&currentCard&&(
+   319→          <div className="text-xs flex-shrink-0 px-2 py-0.5 rounded-full"
+   320→            style={{ background:currentCard.srs_state==='new'?'var(--accent-glow)':'rgba(0,212,168,.1)',color:currentCard.srs_state==='new'?'var(--accent-primary)':'var(--accent-secondary)' }}>
+   321→            {currentCard.srs_state==='new'||currentCard.repetitions===0?'✦ New':'↻ Review'}
+   322→          </div>
+   323→        )}
+   324→      </div>
+   325→
+   326→      <div className="flex-1 flex flex-col items-center justify-center gap-5">
+   327→        <PassiveCard frontCard={frontCard} backCard={backCard} front={front} blueprint={blueprint} flipped={isFlipped} deck={deck} animationsEnabled={animationsEnabled}
+   328→          onFlip={config.interaction==='passive'?()=>reveal(null):null}
+   329→          resultBadge={lastResult&&isRevealed?{correct:lastResult.correct,label:lastResult.correct?`✓ ${Math.round((lastResult.similarity||1)*100)}%`:`✗ ${lastResult.answer||''}`}:null}/>
+   330→
+   331→        <div className="w-full max-w-lg" style={{ transition:'opacity 0.2s ease,transform 0.2s ease',opacity:isPrompt?1:0,transform:isPrompt?'translateY(0)':'translateY(6px)',pointerEvents:isPrompt?'auto':'none',height:isPrompt?'auto':0,overflow:'hidden' }}>
+   332→          {config.interaction==='passive'&&(
+   333→            <button className="btn-primary w-full py-3 text-base" onClick={()=>reveal(null)}>Reveal → <span className="text-xs opacity-50 ml-1">[Space]</span></button>
+   334→          )}
+   335→          {config.interaction==='typing'&&(
+   336→            <div className="card p-5">
+   337→              <div className="flex items-center justify-between mb-2">
+   338→                <div className="section-title">
+   339→                  {latinTyping && romanisationField
+   340→                    ? `Type in Latin script (${romanisationField})`
+   341→                    : `Type the ${config.direction==='targetToSource'?(deck?.source_language||'English'):deck?.target_language} answer`}
+   342→                </div>
+   343→                {latinTyping && romanisationField && (
+   344→                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background:'var(--accent-glow)',color:'var(--accent-primary)' }}>
+   345→                    Romanisation mode
+   346→                  </span>
+   347→                )}
+   348→              </div>
+   349→              <input ref={typingInputRef} className="input text-base" value={typingAnswer} onChange={e=>setTypingAnswer(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submitTyping()} placeholder="Your answer..." data-accent-input="1"/>
+   350→              {showDiacriticBar&&<DiacriticBar marks={diacriticMarks} specials={specialChars}
+   351→                onInsert={ch=>{const input=typingInputRef.current;if(!input){setTypingAnswer(prev=>prev+ch);return};const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=insertCharAtCursor(input.value,pos,ch);setTypingAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}
+   352→                onApplyDiacritic={(combining,group)=>{const input=typingInputRef.current;if(!input)return;const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=applyDiacritic(input.value,pos,combining,group);setTypingAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}/>}
+   353→              <button className="btn-primary mt-3 w-full" onClick={submitTyping}>Check</button>
+   354→            </div>
+   355→          )}
+   356→          {config.interaction==='multipleChoice'&&(
+   357→            <div className="grid grid-cols-1 gap-2">
+   358→              {choices.map((choice,i)=>(
+   359→                <button key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm transition-all" style={{ borderColor:'var(--border)',color:'var(--text-primary)',background:'transparent' }} onClick={()=>submitChoice(choice)}>
+   360→                  <span className="mr-3 text-xs font-mono" style={{ color:'var(--text-muted)' }}>{`${i+1}. ${['A','B','C','D'][i]}`}</span>{choice}
+   361→                </button>
+   362→              ))}
+   363→            </div>
+   364→          )}
+   365→          {config.interaction==='cloze'&&(
+   366→            clozeData.hasCloze?(
+   367→              <div className="card p-5">
+   368→                {(()=>{
+   369→                  const hintField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')
+   370→                  const hint=hintField?fieldText(currentCard.fields?.[hintField.key]):null
+   371→                  const ctx=currentCard.fields?.context||null
+   372→                  return hint?(
+   373→                    <div className="flex items-center justify-between mb-3">
+   374→                      <div className="section-title">{deck?.source_language||'English'}</div>
+   375→                      <div className="text-right">
+   376→                        <div className="text-base font-medium" style={{ color:'var(--text-primary)' }}>{hint}</div>
+   377→                        {ctx&&<div className="text-xs mt-0.5" style={{ color:'var(--text-muted)' }}>{ctx}</div>}
+   378→                      </div>
+   379→                    </div>
+   380→                  ):<div className="section-title mb-3">Complete the sentence</div>
+   381→                })()}
+   382→                <div className="text-center leading-loose mb-4" style={{ color:'var(--text-primary)',fontSize:'17px',fontFamily:fontForText(clozeData.before+clozeData.after) }}>
+   383→                  {clozeData.before}
+   384→                  <input ref={clozeInputRef} className="cloze-input" style={{ width:`${Math.max((clozeData.answer?.length||4)+2,4)*0.95}em`,fontFamily:fontForText(clozeData.answer||'') }}
+   385→                    value={clozeAnswer} onChange={e=>setClozeAnswer(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submitCloze()} data-accent-input="1"/>
+   386→                  {clozeData.after}
+   387→                </div>
+   388→                {showDiacriticBar&&<DiacriticBar marks={diacriticMarks} specials={specialChars}
+   389→                onInsert={ch=>{const input=clozeInputRef.current;if(!input){setClozeAnswer(prev=>prev+ch);return};const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=insertCharAtCursor(input.value,pos,ch);setClozeAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}
+   390→                onApplyDiacritic={(combining,group)=>{const input=clozeInputRef.current;if(!input)return;const pos=input.selectionStart??input.value.length;const {newValue,newCursorPos}=applyDiacritic(input.value,pos,combining,group);setClozeAnswer(newValue);requestAnimationFrame(()=>{input.focus();input.setSelectionRange(newCursorPos,newCursorPos)})}}/>}
+   391→                <button className="btn-primary mt-3 w-full" onClick={submitCloze}>Check</button>
+   392→              </div>
+   393→            ):(
+   394→              <div className="card p-5 text-center text-sm" style={{ color:'var(--text-muted)' }}>
+   395→                No example sentence. <button className="btn-ghost text-sm" onClick={advanceActive}>Skip →</button>
+   396→              </div>
+   397→            )
+   398→          )}
+   399→        </div>
+   400→
+   401→        <div className="w-full max-w-lg" style={{ transition:isRevealed?'opacity 0.25s ease 0.15s,transform 0.25s ease 0.15s':'none',opacity:isRevealed?1:0,transform:isRevealed?'translateY(0)':'translateY(10px)',pointerEvents:isRevealed?'auto':'none',height:isRevealed?'auto':0,overflow:'hidden' }}>
+   402→          {config.interaction==='multipleChoice'&&lastResult&&(
+   403→            <div className="grid grid-cols-1 gap-2 mb-4">
+   404→              {choices.map((choice,i)=>{
+   405→                const correct=choice===getAnswer(currentCard,config.direction,blueprint,deck)
+   406→                const isChosen=choice===lastResult.chosen
+   407→                let borderColor='var(--border)',bg='transparent'
+   408→                if(correct){borderColor='var(--accent-secondary)';bg='rgba(0,212,168,.08)'}
+   409→                else if(isChosen){borderColor='var(--accent-danger)';bg='rgba(225,112,85,.08)'}
+   410→                return <div key={i} className="w-full text-left px-4 py-3 rounded-xl border text-sm" style={{ borderColor,background:bg,color:'var(--text-primary)' }}><span className="mr-3 text-xs font-mono" style={{ color:'var(--text-muted)' }}>{`${i+1}. ${['A','B','C','D'][i]}`}</span>{choice}</div>
+   411→              })}
+   412→            </div>
+   413→          )}
+   414→          {(config.interaction==='typing'||config.interaction==='cloze')&&lastResult&&(
+   415→            <div className="text-sm text-center mb-4 space-y-1">
+   416→              {lastResult.correct?(
+   417→                <div className="font-medium" style={{ color:'var(--accent-secondary)' }}>✓ Correct! {lastResult.similarity<1&&`(${Math.round(lastResult.similarity*100)}%)`}</div>
+   418→              ):(
+   419→                <>
+   420→                  <div style={{ color:'var(--accent-danger)' }}><span className="font-medium">✗ You typed: </span><span className="font-mono">{lastResult.typed||'—'}</span></div>
+   421→                  <div style={{ color:'var(--text-muted)' }}><span>Correct: </span><span className="font-medium" style={{ color:'var(--text-primary)' }}>{lastResult.answer}</span></div>
+   422→                </>
+   423→              )}
+   424→            </div>
+   425→          )}
+   426→          {isActive?(
+   427→            <button className="btn-secondary w-full py-3 text-sm" onClick={advanceActive}>Continue <span className="opacity-40 ml-1 text-xs">[Space]</span></button>
+   428→          ):mode==='learn'?(
+   429→            <div>
+   430→              <div className="section-title text-center mb-3">How well did you know this?</div>
+   431→              <div className="grid grid-cols-4 gap-2">
+   432→                {[{rating:1,label:'Again',cls:'again',key:'1'},{rating:2,label:'Hard',cls:'hard',key:'2'},{rating:3,label:'Good',cls:'good',key:'3'},{rating:4,label:'Easy',cls:'easy',key:'4'}].map(({rating,label,cls,key})=>(
+   433→                  <button key={rating} className={`rating-btn ${cls}`} onClick={()=>advance(rating)}>
+   434→                    <span className="text-xs font-medium">{label}</span>
+   435→                    <span className="text-xs opacity-60">{getNextIntervalLabel(currentCard,rating)}</span>
+   436→                    <span className="text-xs opacity-30">[{key}]</span>
+   437→                  </button>
+   438→                ))}
+   439→              </div>
+   440→            </div>
+   441→          ):(
+   442→            <div className="flex gap-3">
+   443→              <button className="btn-danger flex-1 py-3" onClick={()=>advance(1)}>✗ Didn't know</button>
+   444→              <button className="btn-primary flex-1 py-3" onClick={()=>advance(3)}>✓ Got it</button>
+   445→            </div>
+   446→          )}
+   447→        </div>
+   448→      </div>
+   449→    </div>
+   450→  )
+   451→}
+   452→
+   453→function getFront(card, direction, blueprint, deck, exampleField) {
+   454→  const contextLanguage=deck?.context_language||'target'
+   455→  if (direction==='targetToSource') {
+   456→    const context=card.fields?.context||null
+   457→    let clozeSentence=null
+   458→    if (contextLanguage==='cloze'&&exampleField) {
+   459→      const fieldVal=card.fields?.[exampleField.key]
+   460→      const raw=fieldVal&&typeof fieldVal==='object'?fieldVal.text:(fieldVal||'')
+   461→      if (raw) { const {before,answer,after,hasCloze}=parseCloze(raw); clozeSentence=hasCloze?{before,answer,after}:null }
+   462→    }
+   463→    return {word:card.word,label:deck?.target_language||'Word',isTarget:true,context:contextLanguage!=='cloze'?context:null,clozeSentence}
+   464→  }
+   465→  const srcField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')||blueprint[0]
+   466→  const rawVal=srcField?card.fields?.[srcField.key]:null
+   467→  const val=rawVal&&typeof rawVal==='object'?rawVal.text:rawVal
+   468→  return {word:val||card.word,label:deck?.source_language||'Source',isTarget:false,context:null,clozeSentence:null}
+   469→}
+   470→
+   471→function getAnswer(card, direction, blueprint, deck) {
+   472→  if (direction==='targetToSource') {
+   473→    const srcField=blueprint.find(f=>f.key==='source_translation')||blueprint.find(f=>f.key==='definition')||blueprint.find(f=>f.key==='reading')||blueprint[0]
+   474→    const raw=srcField?card.fields?.[srcField.key]:null
+   475→    return raw&&typeof raw==='object'?raw.text:(raw||card.word)
+   476→  }
+   477→  // sourceToTarget: if latin_typing mode, return the romanisation field text
+   478→  if (deck?.latin_typing && deck?.romanisation_field) {
+   479→    const romVal = card.fields?.[deck.romanisation_field]
+   480→    const romText = romVal && typeof romVal === 'object' ? romVal.text : romVal
+   481→    if (romText) return romText
+   482→  }
+   483→  return card.word
+   484→}
+   485→
+   486→function PassiveCard({ frontCard, backCard, front, blueprint, flipped, deck, onFlip, resultBadge, animationsEnabled=true }) {
+   487→  const frontField=blueprint.find(f=>f.show_on_front&&f.key!=='context')
+   488→  return (
+   489→    <div className="w-full max-w-lg card-3d" style={{ cursor:!flipped&&onFlip?'pointer':'default',height:'280px',position:'relative' }}
+   490→      onClick={!flipped&&onFlip?onFlip:undefined}>
+   491→      <div className={`card-inner w-full h-full ${flipped?'flipped':''}`} style={{ position:'relative',transition:animationsEnabled?undefined:'none' }}>
+   492→        <div className="card-face card-elevated flex flex-col items-center justify-center p-8 rounded-2xl select-none">
+   493→          <div className="section-title mb-3">{front.label}</div>
+   494→          <div className="font-display text-5xl font-bold text-center leading-tight" style={{ color:'var(--text-primary)',fontFamily:fontForText(front.word) }}>{front.word}</div>
+   495→          {front.isTarget&&front.clozeSentence&&(
+   496→            <div className="mt-3 px-3 py-2 rounded-lg text-center w-full" style={{ background:'var(--bg-surface)',border:'1px solid var(--border)' }}>
+   497→              <div className="text-sm leading-relaxed" style={{ color:'var(--text-secondary)',fontFamily:fontForText(front.clozeSentence.before+front.clozeSentence.after) }}>
+   498→                {front.clozeSentence.before}<span className="px-1.5 rounded font-medium" style={{ background:'var(--bg-elevated)',color:'var(--text-muted)' }}>___</span>{front.clozeSentence.after}
+   499→              </div>
+   500→            </div>
+   501→          )}
+   502→          {front.isTarget&&front.context&&!front.clozeSentence&&(
+   503→            <div className="mt-3 px-3 py-1.5 rounded-lg text-center" style={{ background:'var(--accent-glow)',border:'1px solid rgba(124,106,240,.2)' }}>
+   504→              <div className="text-sm font-medium" style={{ color:'var(--accent-primary)',fontFamily:fontForText(front.context) }}>{front.context}</div>
+   505→            </div>
+   506→          )}
+   507→          {front.isTarget&&frontField&&frontCard?.fields?.[frontField.key]&&(
+   508→            <div className="mt-3 text-base" style={{ color:'var(--text-secondary)' }}>
+   509→              <RubyText fieldValue={frontCard.fields[frontField.key]} phonetics={frontField.phonetics}/>
+   510→            </div>
+   511→          )}
+   512→          {onFlip&&<div className="absolute bottom-4 text-xs" style={{ color:'var(--text-muted)' }}>tap to reveal · Space</div>}
+   513→        </div>
+   514→        <div className="card-face card-back card-elevated flex flex-col p-6 rounded-2xl overflow-auto">
+   515→          <div className="flex items-center gap-3 mb-4">
+   516→            <div className="text-2xl font-bold" style={{ color:'var(--accent-primary)',fontFamily:fontForText(backCard?.word||'') }}>{backCard?.word}</div>
+   517→            {backCard?.interval>0&&<span className="tag text-xs">{backCard.interval}d interval</span>}
+   518→            {resultBadge&&(
+   519→              <span className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full"
+   520→                style={{ background:resultBadge.correct?'rgba(0,212,168,.15)':'rgba(225,112,85,.15)',color:resultBadge.correct?'var(--accent-secondary)':'var(--accent-danger)' }}>{resultBadge.label}</span>
+   521→            )}
+   522→          </div>
+   523→          <div className="space-y-2.5 flex-1 overflow-auto">
+   524→            {blueprint.map(field=>{
+   525→              const value=backCard?.fields?.[field.key]
+   526→              const textVal=value&&typeof value==='object'?value.text:value
+   527→              if (!textVal) return null
+   528→              return (
+   529→                <div key={field.key} className="flex gap-2 min-w-0">
+   530→                  <span className="section-title flex-shrink-0 mt-0.5" style={{ width:'80px' }}>{field.label}</span>
+   531→                  <div className="flex-1 min-w-0 text-sm" style={{ color:'var(--text-primary)' }}>
+   532→                    {field.field_type==='example'
+   533→                      ?<ExampleDisplay fieldValue={value} cardId={backCard?.id}/>
+   534→                      :<RubyText fieldValue={value} phonetics={field.phonetics}/>}
+   535→                  </div>
+   536→                </div>
+   537→              )
+   538→            })}
+   539→          </div>
+   540→        </div>
+   541→      </div>
+   542→    </div>
+   543→  )
+   544→}
+   545→
+   546→function ExampleDisplay({ fieldValue, cardId }) {
+   547→  const raw = fieldValue&&typeof fieldValue==='object'?fieldValue.text:(fieldValue||'')
+   548→  const annotations = fieldValue&&typeof fieldValue==='object'?Object.entries(fieldValue).filter(([k])=>k!=='text'):[]
+   549→  const sentenceParts = raw.split(' ;;; ').map(s=>s.trim()).filter(Boolean)
+   550→  const idx = useMemo(()=>Math.floor(Math.random()*Math.max(sentenceParts.length,1)),[cardId]) // eslint-disable-line
+   551→  const sentence = sentenceParts[idx]||raw
+   552→  const renderSentence=(text)=>{
+   553→    const {before:b,answer:a,after:af,hasCloze:hc}=parseCloze(text)
+   554→    if (!hc) return <span>{text}</span>
+   555→    return <>{b}<mark style={{ background:'rgba(124,106,240,0.2)',color:'var(--accent-primary)',borderRadius:'3px',padding:'0 3px' }}>{a}</mark>{af}</>
+   556→  }
+   557→  return (
+   558→    <span style={{ color:'var(--text-primary)',fontFamily:fontForText(sentence) }}>
+   559→      {renderSentence(sentence)}
+   560→      {annotations.map(([key,annoRaw])=>{
+   561→        const annoParts=(annoRaw||'').split(' ;;; ').map(s=>s.trim()).filter(Boolean)
+   562→        const annoSentence=annoParts[idx]||annoRaw||''
+   563→        if (!annoSentence) return null
+   564→        return <span key={key} className="block text-xs mt-1" style={{ color:'var(--text-muted)',fontFamily:fontForText(annoSentence) }}>{renderSentence(annoSentence)}</span>
+   565→      })}
+   566→    </span>
+   567→  )
+   568→}
+   569→
+   570→function SessionComplete({ stats, total, mode, onEnd }) {
+   571→  const pct=total>0?Math.round((stats.correct/total)*100):0
+   572→  const emoji=pct>=90?'🎉':pct>=70?'💪':pct>=50?'📖':'🔄'
+   573→  return (
+   574→    <div className="max-w-md mx-auto px-6 py-16 text-center animate-slide-up">
+   575→      <div className="text-6xl mb-6">{total===0?'✅':emoji}</div>
+   576→      <h2 className="font-display text-3xl font-bold mb-2" style={{ color:'var(--text-primary)' }}>{total===0?'All done!':'Session complete!'}</h2>
+   577→      <div className="text-sm mb-8" style={{ color:'var(--text-muted)' }}>{total===0?'No cards available.':`You reviewed ${stats.reviewed} card${stats.reviewed!==1?'s':''}.`}</div>
+   578→      {stats.reviewed>0&&(
+   579→        <div className="card p-5 mb-6">
+   580→          <div className="grid grid-cols-4 gap-3 mb-4">
+   581→            {[{label:'Reviewed',value:stats.reviewed},{label:'Correct',value:stats.correct,color:'var(--accent-secondary)'},{label:'Hard',value:stats.hard,color:'#fdcb6e'},{label:'Again',value:stats.again,color:'var(--accent-danger)'}].map(s=>(
+   582→              <div key={s.label} className="text-center"><div className="font-display text-2xl font-bold" style={{ color:s.color||'var(--text-primary)' }}>{s.value}</div><div className="text-xs mt-1" style={{ color:'var(--text-muted)' }}>{s.label}</div></div>
+   583→            ))}
+   584→          </div>
+   585→          <div className="progress-bar mb-2"><div className="progress-fill" style={{ width:`${pct}%` }}/></div>
+   586→          <div className="text-xs" style={{ color:'var(--text-muted)' }}>{pct}% correct</div>
+   587→        </div>
+   588→      )}
+   589→      <button className="btn-primary w-full py-3 text-base" onClick={onEnd}>← Back to Setup</button>
+   590→    </div>
+   591→  )
+   592→}
+   593→
+   594→/**
+   595→ * DiacriticBar — keyboard-driven diacritic composer.
+   596→ *
+   597→ * Number keys 1–9, 0 trigger diacritics (compose onto prev char).
+   598→ * Shift+1–9,0 insert special standalone characters.
+   599→ * Clicking a diacritic button composes; clicking a special char inserts it directly.
+   600→ */
+   601→const DIACRITIC_KEYS = ['1','2','3','4','5','6','7','8','9','0']
+   602→
+   603→function DiacriticBar({ marks, specials, onInsert, onApplyDiacritic }) {
+   604→  useEffect(()=>{
+   605→    if (!marks.length && !specials.length) return
+   606→    const handler=(e)=>{
+   607→      const target=e.target
+   608→      if (!['INPUT','TEXTAREA'].includes(target.tagName)) return
+   609→      if (!target.dataset.accentInput) return
+   610→
+   611→      // Number keys 1–0 → apply diacritic mark (compose onto char before cursor)
+   612→      if (!e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+   613→        const idx = DIACRITIC_KEYS.indexOf(e.key)
+   614→        if (idx !== -1 && idx < marks.length) {
+   615→          e.preventDefault()
+   616→          onApplyDiacritic(marks[idx].combining, marks[idx].group)
+   617→          return
+   618→        }
+   619→      }
+   620→
+   621→      // Shift+number → insert special character
+   622→      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+   623→        // Shift+1 = '!', but we map by key code position
+   624→        const shiftMap = {'!':'1','@':'2','#':'3','$':'4','%':'5','^':'6','&':'7','*':'8','(':'9',')':'0'}
+   625→        const digit = shiftMap[e.key]
+   626→        if (digit) {
+   627→          const idx = DIACRITIC_KEYS.indexOf(digit)
+   628→          if (idx !== -1 && idx < specials.length) {
+   629→            e.preventDefault()
+   630→            onInsert(specials[idx])
+   631→          }
+   632→        }
+   633→      }
+   634→    }
+   635→    window.addEventListener('keydown', handler)
+   636→    return () => window.removeEventListener('keydown', handler)
+   637→  }, [marks, specials, onInsert, onApplyDiacritic])
+   638→
+   639→  if (!marks.length && !specials.length) return null
+   640→
+   641→  return (
+   642→    <div className="mt-2 space-y-1">
+   643→      {/* Diacritic marks row */}
+   644→      {marks.length > 0 && (
+   645→        <div className="flex gap-1 flex-wrap justify-center">
+   646→          {marks.map((mark, i) => (
+   647→            <button key={mark.key} type="button" tabIndex={-1}
+   648→              onClick={() => onApplyDiacritic(mark.combining, mark.group)}
+   649→              className="flex flex-col items-center justify-center rounded-lg border transition-all hover:border-purple-400"
+   650→              style={{ minWidth:'32px', height:'32px', padding:'0 6px', borderColor:'var(--border)', background:'var(--bg-surface)', color:'var(--text-primary)', fontSize:'15px', position:'relative', fontFamily:'serif' }}
+   651→              title={`${mark.hint} — press ${DIACRITIC_KEYS[i] ?? '?'}`}>
+   652→              {mark.label}
+   653→              {i < DIACRITIC_KEYS.length && (
+   654→                <span style={{ position:'absolute', bottom:'1px', right:'3px', fontSize:'7px', color:'var(--text-muted)', lineHeight:1 }}>
+   655→                  {DIACRITIC_KEYS[i]}
+   656→                </span>
+   657→              )}
+   658→            </button>
+   659→          ))}
+   660→        </div>
+   661→      )}
+   662→      {/* Special standalone chars row */}
+   663→      {specials.length > 0 && (
+   664→        <div className="flex gap-1 flex-wrap justify-center">
+   665→          {specials.map((ch, i) => (
+   666→            <button key={ch} type="button" tabIndex={-1}
+   667→              onClick={() => onInsert(ch)}
+   668→              className="flex flex-col items-center justify-center rounded-lg border transition-all hover:border-purple-400"
+   669→              style={{ minWidth:'32px', height:'32px', padding:'0 6px', borderColor:'rgba(124,106,240,.3)', background:'var(--accent-glow)', color:'var(--accent-primary)', fontSize:'14px', position:'relative', fontFamily:'serif' }}
+   670→              title={`Insert ${ch}${i < specials.length ? ` — Shift+${DIACRITIC_KEYS[i] ?? '?'}` : ''}`}>
+   671→              {ch}
+   672→              {i < DIACRITIC_KEYS.length && (
+   673→                <span style={{ position:'absolute', bottom:'1px', right:'3px', fontSize:'7px', color:'var(--accent-primary)', opacity:0.6, lineHeight:1 }}>
+   674→                  ⇧{DIACRITIC_KEYS[i]}
+   675→                </span>
+   676→              )}
+   677→            </button>
+   678→          ))}
+   679→        </div>
+   680→      )}
+   681→    </div>
+   682→  )
+   683→}
+   684→

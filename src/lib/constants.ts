@@ -1,4 +1,4 @@
-import type { RubyType, ExtraType } from "./types";
+import type { RubyType, ExtraType, BlueprintFieldDef } from "./types";
 
 export interface LanguageDef {
   name: string;
@@ -129,6 +129,30 @@ export const QUICK_ADD_FIELDS = [
     label: "Context",
     description:
       "Grammatical or usage context to disambiguate — e.g. (masculine singular).",
+  },
+];
+
+// Mandatory fields always prepended to every blueprint (locked, can't delete).
+export const MANDATORY_FIELD_KEYS = ["source_translation", "context"];
+
+export const MANDATORY_FIELDS: Omit<BlueprintFieldDef, "position">[] = [
+  {
+    key: "source_translation",
+    label: "Translation",
+    description:
+      "A single short translation of the word in the source language. One word or a very short phrase only.",
+    fieldType: "text",
+    showOnFront: false,
+    phonetics: { ruby: "none", extras: [] },
+  },
+  {
+    key: "context",
+    label: "Context",
+    description:
+      "Grammatical or usage context to disambiguate — e.g. (masculine singular), (verb, informal), (pl.).",
+    fieldType: "text",
+    showOnFront: false,
+    phonetics: { ruby: "none", extras: [] },
   },
 ];
 
