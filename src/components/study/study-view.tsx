@@ -18,6 +18,7 @@ import {
   Edit,
   ChevronLeft,
   ChevronRight,
+  Clock,
 } from "lucide-react";
 import { useDeck, useStudyCards, useReviewCard, useDeckTags } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -72,6 +73,25 @@ export function StudyView({ deckId }: { deckId: string }) {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("setup");
 
+  // Check for a saved session — initialise state directly from localStorage.
+  const sessionKey = `polyglot_session_${deckId}`;
+  const [savedSession, setSavedSession] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(sessionKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.savedAt && Date.now() - parsed.savedAt < 24 * 60 * 60 * 1000) {
+          return parsed;
+        }
+        localStorage.removeItem(sessionKey);
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
+
   const { data: studyData, isLoading: cardsLoading } = useStudyCards(deckId, {
     mode,
     pool: mode === "freestyle" ? pool : undefined,
@@ -99,11 +119,23 @@ export function StudyView({ deckId }: { deckId: string }) {
     setIndex(0);
     setResult(null);
     setPhase("studying");
+    // Clear any saved session when starting fresh.
+    localStorage.removeItem(sessionKey);
+    setSavedSession(null);
   };
 
   const onComplete = (r: SessionResult) => {
     setResult(r);
     setPhase("complete");
+    // Clear saved session on completion.
+    localStorage.removeItem(sessionKey);
+    setSavedSession(null);
+  };
+
+  const clearSession = () => {
+    localStorage.removeItem(sessionKey);
+    setSavedSession(null);
+    toast({ title: "Previous session cleared." });
   };
 
   if (isLoading || !deck) {
@@ -149,6 +181,8 @@ export function StudyView({ deckId }: { deckId: string }) {
           totalCards={studyData?.total || 0}
           loading={cardsLoading}
           onStart={startSession}
+          savedSession={savedSession}
+          onClearSession={clearSession}
         />
       )}
 
@@ -209,6 +243,16 @@ function StudySetup(props: {
   totalCards: number;
   loading: boolean;
   onStart: () => void;
+  savedSession: {
+    index: number;
+    total: number;
+    counts: { again: number; hard: number; good: number; easy: number };
+    mode: string;
+    interaction: string;
+    direction: string;
+    savedAt: number;
+  } | null;
+  onClearSession: () => void;
 }) {
   const exampleField = props.fields.find((f) => f.fieldType === "example");
   const clozeAvailable = !!exampleField && props.direction === "targetToSource";
@@ -236,6 +280,36 @@ function StudySetup(props: {
         </div>
         <ShortcutsHelp />
       </div>
+
+      {/* Resume session banner */}
+      {props.savedSession && (
+        <div
+          className="mb-4 p-4 rounded-xl flex items-center justify-between gap-3 animate-slide-up"
+          style={{
+            background:
+              "linear-gradient(135deg, var(--accent-glow), color-mix(in srgb, var(--accent-warm) 8%, transparent))",
+            border: "1px solid color-mix(in srgb, var(--accent-warm) 25%, transparent)",
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <Clock className="size-5 text-[var(--accent-warm)] shrink-0" />
+            <div>
+              <div className="text-sm font-medium">Previous session in progress</div>
+              <div className="text-xs text-muted">
+                Card {props.savedSession.index + 1} of {props.savedSession.total} ·{" "}
+                {props.savedSession.counts.good + props.savedSession.counts.easy} correct ·{" "}
+                {props.savedSession.counts.again} again
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={props.onClearSession}
+            className="text-xs text-muted hover:text-[var(--text-primary)] transition-colors shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="pc-card p-5 space-y-5">
         {/* Mode */}

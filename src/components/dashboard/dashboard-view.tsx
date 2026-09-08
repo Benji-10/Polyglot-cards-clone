@@ -370,8 +370,20 @@ function StatCard({
   loading?: boolean;
 }) {
   return (
-    <Card className="pc-card">
-      <CardContent className="p-4">
+    <Card
+      className="pc-card relative overflow-hidden"
+      style={{
+        background: `linear-gradient(135deg, var(--bg-card), color-mix(in srgb, ${color} 4%, var(--bg-card)))`,
+      }}
+    >
+      <div
+        className="absolute top-0 right-0 w-20 h-20 rounded-full opacity-10 pointer-events-none"
+        style={{
+          background: `radial-gradient(circle, ${color}, transparent 70%)`,
+          transform: "translate(30%, -30%)",
+        }}
+      />
+      <CardContent className="p-4 relative">
         <div className="flex items-center justify-between mb-2">
           <span
             className="size-9 rounded-lg flex items-center justify-center"

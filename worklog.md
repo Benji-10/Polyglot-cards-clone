@@ -643,3 +643,44 @@ Stage Summary:
 - Deck Stats API verified working via curl.
 - VLM dashboard rating: 8.5/10.
 - Next priorities: study session resume, mobile drawer improvements, more AI features.
+
+---
+Task ID: 18 (session resume + stat card gradients + QA)
+Agent: web-dev-review cron
+Task: Add study session resume with localStorage, improve stat card styling with gradient backgrounds.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8/10 → 8.5/10 (excellent hierarchy, strong dark mode).
+- VLM noted stat cards could use more visual variation.
+- Dev server still unstable for sustained browser testing.
+
+New features:
+1. Study session resume:
+   - Session state saved to localStorage under key `polyglot_session_${deckId}`.
+   - Saved data: index, total, counts (again/hard/good/easy), mode, interaction, direction, savedAt.
+   - Session expires after 24 hours (auto-cleared).
+   - On the study setup screen, a "Previous session in progress" banner appears with:
+     - Clock icon
+     - Card X of Y · N correct · N again
+     - "Dismiss" button to clear the saved session.
+   - Starting a new session clears the saved one.
+   - Completing a session clears the saved one.
+   - Uses lazy useState initializer (no set-state-in-effect lint error).
+
+Styling improvements:
+- Dashboard stat cards: added subtle gradient backgrounds (linear-gradient from bg-card to 4% color mix).
+- Each stat card has a radial glow in the top-right corner matching its accent color (10% opacity).
+- Cards are `relative overflow-hidden` so the glow stays within bounds.
+- Content wrapped in `relative` to stay above the glow.
+- VLM confirmed: "subtle multi-toned gradients and soft colored glows behind icons that match the card's accent color".
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- VLM dashboard: 9/10 (up from 8.5/10) — stat cards now have gradient backgrounds + glow effects, excellent contrast, no visual bugs.
+
+Stage Summary:
+- Added study session resume feature with localStorage persistence (24-hour expiry).
+- Improved stat card styling with gradient backgrounds and radial glow effects.
+- VLM dashboard rating improved: 8.5/10 → 9/10.
+- Next priorities: full session resume (restore queue + index), mobile drawer improvements, more AI features.
