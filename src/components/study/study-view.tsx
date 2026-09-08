@@ -14,6 +14,7 @@ import {
   Volume2,
   ArrowRight,
   ArrowLeftRight,
+  HelpCircle,
 } from "lucide-react";
 import { useDeck, useStudyCards, useReviewCard } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -214,8 +215,13 @@ function StudySetup(props: {
 
   return (
     <div>
-      <h1 className="font-display text-3xl font-semibold mb-1">Study</h1>
-      <p className="text-secondary mb-6">{props.deckName}</p>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="font-display text-3xl font-semibold mb-1">Study</h1>
+          <p className="text-secondary">{props.deckName}</p>
+        </div>
+        <ShortcutsHelp />
+      </div>
 
       <div className="pc-card p-5 space-y-5">
         {/* Mode */}
@@ -1150,5 +1156,86 @@ function StatBox({
       </div>
       <div className="text-xs text-muted mt-0.5">{label}</div>
     </div>
+  );
+}
+
+// Keyboard shortcuts help overlay — press ? or click the help button.
+function ShortcutsHelp() {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+        e.preventDefault();
+        setOpen((o) => !o);
+      } else if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const shortcuts = [
+    { keys: "Space / Enter", action: "Flip card / submit answer / continue" },
+    { keys: "1 2 3 4", action: "Grade Again / Hard / Good / Easy (passive)" },
+    { keys: "Enter", action: "Submit typing or cloze answer" },
+    { keys: "Escape", action: "Exit session" },
+    { keys: "?", action: "Toggle this shortcuts overlay" },
+  ];
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-secondary h-9 w-9 flex items-center justify-center"
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts (press ?)"
+      >
+        <HelpCircle className="size-4" />
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="pc-card-elevated p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-xl font-semibold flex items-center gap-2">
+                <Keyboard className="size-5 text-[var(--accent-primary)]" />
+                Keyboard Shortcuts
+              </h3>
+              <button
+                onClick={() => setOpen(false)}
+                className="text-muted hover:text-[var(--text-primary)] p-1"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {shortcuts.map((s) => (
+                <div
+                  key={s.keys}
+                  className="flex items-center justify-between gap-4 py-2 border-b subtle-border last:border-0"
+                >
+                  <span className="text-sm text-secondary">{s.action}</span>
+                  <kbd className="font-mono text-xs px-2 py-1 rounded bg-elevated border surface-border text-[var(--text-primary)] whitespace-nowrap">
+                    {s.keys}
+                  </kbd>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted mt-4 text-center">
+              Shortcuts are disabled while typing in an input field.
+            </p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

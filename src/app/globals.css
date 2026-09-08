@@ -66,8 +66,8 @@
   --border: #2a2a5a;
   --border-subtle: #1e1e40;
   --text-primary: #e8e8f8;
-  --text-secondary: #9898c8;
-  --text-muted: #5858a0;
+  --text-secondary: #b0b0d8;
+  --text-muted: #a8a8d0;
   --accent-primary: #7c6af0;
   --accent-secondary: #00d4a8;
   --accent-warm: #fdcb6e;
@@ -110,10 +110,10 @@
     font-family: var(--font-cjk);
   }
   .text-muted {
-    color: var(--text-muted);
+    color: var(--text-muted) !important;
   }
   .text-secondary {
-    color: var(--text-secondary);
+    color: var(--text-secondary) !important;
   }
 
   /* Background helpers */

@@ -74,6 +74,7 @@ model Card {
   interval      Int       @default(0) // days
   seen          Boolean   @default(false)
   learningStep  Int       @default(0) // index into [1,10] minute steps
+  suspended     Boolean  @default(false) // skip this card in study sessions
   lastReviewedAt DateTime?
   dueAt         DateTime  @default(now())
   createdAt     DateTime  @default(now())
@@ -84,6 +85,7 @@ model Card {
   @@index([deckId])
   @@index([dueAt])
   @@index([srsState])
+  @@index([suspended])
 }
 
 model ReviewLog {

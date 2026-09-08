@@ -134,13 +134,13 @@ export function StatsView() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
                   <XAxis
                     dataKey="date"
-                    tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}
                     interval={4}
                   />
                   <YAxis
-                    tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}
                     width={28}

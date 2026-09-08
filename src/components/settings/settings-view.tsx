@@ -50,22 +50,20 @@ export function SettingsView() {
 
       {/* Account */}
       <Section icon={UserIcon} title="Account">
-        <div className="flex items-center gap-3 mb-4">
-          <Avatar className="size-12">
+        <div className="flex items-center gap-3">
+          <Avatar className="size-12 shrink-0">
             <AvatarFallback className="bg-elevated font-medium">
               {initials}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
             <div className="font-medium truncate">{user?.name || "Guest"}</div>
-            <div className="text-sm text-muted truncate">{user?.email}</div>
+            <div className="text-sm text-secondary truncate">{user?.email}</div>
+            <div className="text-xs text-muted mt-0.5">
+              {isNetlify ? "Netlify Identity account" : "Local guest account"}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-secondary">
-            {isNetlify ? "Netlify Identity account" : "Local guest account"}
-          </span>
-          <Button variant="ghost" className="btn-danger h-9 gap-2" onClick={signOut}>
+          <Button variant="ghost" className="btn-danger h-9 gap-2 shrink-0" onClick={signOut}>
             <LogOut className="size-4" /> Sign out
           </Button>
         </div>

@@ -163,6 +163,33 @@ export function useDeleteCard(deckId: string) {
   });
 }
 
+export function useResetCardSrs(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<CardData>(`/api/cards/${id}/reset-srs`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+      qc.invalidateQueries({ queryKey: KEYS.stats });
+    },
+  });
+}
+
+export function useToggleSuspendCard(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, suspended }: { id: string; suspended?: boolean }) =>
+      api.post<CardData>(`/api/cards/${id}/suspend`, { suspended }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+      qc.invalidateQueries({ queryKey: KEYS.stats });
+    },
+  });
+}
+
 // ---- Study ----
 export function useStudyCards(
   deckId: string | null,

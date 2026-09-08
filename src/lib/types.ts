@@ -104,6 +104,7 @@ export interface CardData {
   interval: number;
   seen: boolean;
   learningStep: number;
+  suspended: boolean;
   lastReviewedAt: string | null;
   dueAt: string;
   createdAt: string;

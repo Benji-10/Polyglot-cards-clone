@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   Play,
+  Pause,
   Settings2,
   MoreVertical,
   Edit,
@@ -14,12 +15,15 @@ import {
   Import,
   LayoutGrid,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import {
   useDeck,
   useCards,
   useDeleteCard,
   useUpdateCard,
+  useResetCardSrs,
+  useToggleSuspendCard,
   useBlueprint,
 } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -262,6 +266,8 @@ function CardCollection({
     dir: "desc",
   });
   const deleteMut = useDeleteCard(deckId);
+  const resetSrsMut = useResetCardSrs(deckId);
+  const suspendMut = useToggleSuspendCard(deckId);
   const { toast } = useToast();
 
   const cards = data?.cards || [];
@@ -414,9 +420,14 @@ function CardCollection({
                         />
                       </TableCell>
                       <TableCell className="font-medium">
-                        <span className={cn(isCJK(card.word) && "font-cjk")}>
+                        <span className={cn(isCJK(card.word) && "font-cjk", card.suspended && "opacity-50 line-through")}>
                           {card.word}
                         </span>
+                        {card.suspended && (
+                          <span className="ml-1.5 text-[0.65rem] text-[var(--accent-warm)]" title="Suspended">
+                            ⏸
+                          </span>
+                        )}
                       </TableCell>
                       {visibleFields.map((f) => (
                         <TableCell
@@ -448,6 +459,53 @@ function CardCollection({
                           >
                             <DropdownMenuItem onClick={() => onEdit(card)}>
                               <Edit className="size-4 mr-2" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                try {
+                                  await resetSrsMut.mutateAsync(card.id);
+                                  toast({ title: "SRS progress reset." });
+                                } catch (e) {
+                                  toast({
+                                    title: "Failed to reset",
+                                    description: (e as Error).message,
+                                    variant: "destructive",
+                                  });
+                                }
+                              }}
+                            >
+                              <RotateCcw className="size-4 mr-2" /> Reset SRS
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                try {
+                                  await suspendMut.mutateAsync({
+                                    id: card.id,
+                                    suspended: !card.suspended,
+                                  });
+                                  toast({
+                                    title: card.suspended
+                                      ? "Card unsuspended."
+                                      : "Card suspended.",
+                                  });
+                                } catch (e) {
+                                  toast({
+                                    title: "Failed to toggle",
+                                    description: (e as Error).message,
+                                    variant: "destructive",
+                                  });
+                                }
+                              }}
+                            >
+                              {card.suspended ? (
+                                <>
+                                  <Play className="size-4 mr-2" /> Unsuspend
+                                </>
+                              ) : (
+                                <>
+                                  <Pause className="size-4 mr-2" /> Suspend
+                                </>
+                              )}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               className="text-[var(--accent-danger)]"

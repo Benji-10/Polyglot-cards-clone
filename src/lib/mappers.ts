@@ -95,6 +95,7 @@ export function mapCard(card: Card): CardData {
     interval: card.interval,
     seen: card.seen,
     learningStep: card.learningStep,
+    suspended: card.suspended,
     lastReviewedAt: card.lastReviewedAt ? card.lastReviewedAt.toISOString() : null,
     dueAt: card.dueAt.toISOString(),
     createdAt: card.createdAt.toISOString(),

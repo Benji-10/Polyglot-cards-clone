@@ -14,15 +14,18 @@ export type View =
 interface UiState {
   view: View;
   sidebarOpen: boolean;
+  paletteOpen: boolean;
   studyMode: StudyMode;
   setView: (v: View) => void;
   setSidebarOpen: (open: boolean) => void;
+  setPaletteOpen: (open: boolean) => void;
   setStudyMode: (m: StudyMode) => void;
 }
 
 export const useUi = create<UiState>((set) => ({
   view: { name: "dashboard" },
   sidebarOpen: false,
+  paletteOpen: false,
   studyMode: {
     interaction: "passive",
     batchSize: 20,
@@ -31,5 +34,6 @@ export const useUi = create<UiState>((set) => ({
   },
   setView: (view) => set({ view, sidebarOpen: false }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setStudyMode: (studyMode) => set({ studyMode }),
 }));

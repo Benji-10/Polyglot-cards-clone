@@ -29,6 +29,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { DeckFormDialog } from "@/components/decks/deck-form-dialog";
+import { CommandPalette } from "@/components/command-palette";
+import { Search } from "lucide-react";
 
 const NAV_ITEMS: {
   label: string;
@@ -43,7 +45,7 @@ const NAV_ITEMS: {
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { view, setView, sidebarOpen, setSidebarOpen } = useUi();
+  const { view, setView, sidebarOpen, setSidebarOpen, paletteOpen, setPaletteOpen } = useUi();
   const { user, signOut } = useAuth();
   const { data: decks } = useDecks();
   const [createOpen, setCreateOpen] = useState(false);
@@ -97,17 +99,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <ScrollArea className="flex-1 scrollbar-thin">
           <div className="p-3 space-y-6">
-            {/* Create deck */}
-            <DeckFormDialog
-              open={createOpen}
-              onOpenChange={setCreateOpen}
-              trigger={
-                <Button className="btn-primary w-full h-10 gap-2">
-                  <Plus className="size-4" />
-                  New Deck
-                </Button>
-              }
-            />
+            {/* Search + Create deck */}
+            <div className="space-y-2">
+              <button
+                onClick={() => setPaletteOpen(true)}
+                className="w-full flex items-center gap-2 px-3 h-9 rounded-lg bg-elevated border surface-border text-sm text-muted hover:border-[var(--accent-primary)]/40 hover:text-[var(--text-secondary)] transition-colors"
+              >
+                <Search className="size-3.5" />
+                <span className="flex-1 text-left">Search...</span>
+                <kbd className="font-mono text-[0.6rem] px-1 py-0.5 rounded bg-[var(--bg-card)] border surface-border">
+                  ⌘K
+                </kbd>
+              </button>
+              <DeckFormDialog
+                open={createOpen}
+                onOpenChange={setCreateOpen}
+                trigger={
+                  <Button className="btn-primary w-full h-10 gap-2">
+                    <Plus className="size-4" />
+                    New Deck
+                  </Button>
+                }
+              />
+            </div>
 
             {/* Decks list */}
             <div>
@@ -217,6 +231,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <main className="flex-1 overflow-y-auto scrollbar-thin">{children}</main>
       </div>
+
+      <CommandPalette />
     </div>
   );
 }

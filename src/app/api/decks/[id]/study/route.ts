@@ -18,16 +18,17 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const randomise = url.searchParams.get("randomise") === "true";
   const limit = Math.min(500, Number(url.searchParams.get("limit") || 50));
 
-  let where: Record<string, unknown> = { deckId: id };
+  let where: Record<string, unknown> = { deckId: id, suspended: false };
   if (mode === "learn") {
     where = {
       deckId: id,
+      suspended: false,
       OR: [{ srsState: "new" }, { dueAt: { lte: new Date() } }],
     };
   } else {
     // freestyle — all cards in chosen pool
-    if (pool === "seen") where = { deckId: id, seen: true };
-    else if (pool === "unseen") where = { deckId: id, seen: false };
+    if (pool === "seen") where = { deckId: id, suspended: false, seen: true };
+    else if (pool === "unseen") where = { deckId: id, suspended: false, seen: false };
   }
 
   let cards = await db.card.findMany({ where, take: limit });

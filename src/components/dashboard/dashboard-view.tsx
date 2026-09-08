@@ -175,13 +175,13 @@ export function DashboardView() {
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
                       <XAxis
                         dataKey="date"
-                        tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+                        tick={{ fill: "var(--text-muted)", fontSize: 11 }}
                         axisLine={false}
                         tickLine={false}
                         interval={4}
                       />
                       <YAxis
-                        tick={{ fill: "var(--text-muted)", fontSize: 10 }}
+                        tick={{ fill: "var(--text-muted)", fontSize: 11 }}
                         axisLine={false}
                         tickLine={false}
                         width={28}
@@ -348,7 +348,7 @@ function StatCard({
         ) : (
           <div className="font-display text-2xl font-semibold">{value}</div>
         )}
-        <div className="text-xs text-muted mt-0.5">{label}</div>
+        <div className="text-sm text-secondary mt-0.5">{label}</div>
       </CardContent>
     </Card>
   );
@@ -366,12 +366,12 @@ function SummaryStat({
   return (
     <Card className="pc-card">
       <CardContent className="p-3 flex items-center gap-2.5">
-        <Icon className="size-4 text-muted" />
+        <Icon className="size-4 text-secondary" />
         <div>
           <div className="font-display text-lg font-semibold leading-none">
             {value}
           </div>
-          <div className="text-[0.7rem] text-muted mt-0.5">{label}</div>
+          <div className="text-xs text-secondary mt-0.5">{label}</div>
         </div>
       </CardContent>
     </Card>
