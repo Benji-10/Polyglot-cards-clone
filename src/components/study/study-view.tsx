@@ -164,6 +164,8 @@ export function StudyView({ deckId }: { deckId: string }) {
           contextLanguage={deck.contextLanguage}
           strictAccents={deck.strictAccents}
           strictMode={deck.strictMode}
+          latinTyping={deck.latinTyping ?? false}
+          romanisationField={deck.romanisationField ?? ""}
           onComplete={onComplete}
           onExit={() => setPhase("setup")}
           ttsEnabled={settings.ttsEnabled}
@@ -464,7 +466,9 @@ function ModeButton({
 function getAnswer(
   card: CardData,
   direction: Direction,
-  fields: BlueprintFieldDef[]
+  fields: BlueprintFieldDef[],
+  latinTyping?: boolean,
+  romanisationField?: string
 ): string {
   if (direction === "targetToSource") {
     // Recall the source-language translation.
@@ -477,6 +481,11 @@ function getAnswer(
     return raw ? fieldValueToAnnotated(raw)?.text || "" : card.word;
   }
   // sourceToTarget — recall the target-language word.
+  if (latinTyping && romanisationField) {
+    const romVal = card.fields[romanisationField];
+    const romText = fieldValueToAnnotated(romVal)?.text;
+    if (romText) return romText;
+  }
   return card.word;
 }
 
@@ -493,6 +502,8 @@ function StudySession(props: {
   contextLanguage: string;
   strictAccents: boolean;
   strictMode: boolean;
+  latinTyping: boolean;
+  romanisationField: string;
   onComplete: (r: SessionResult) => void;
   onExit: () => void;
   ttsEnabled: boolean;
@@ -601,7 +612,7 @@ function StudySession(props: {
 
   const submitTyping = () => {
     if (!card) return;
-    const expected = getAnswer(card, props.direction, props.fields);
+    const expected = getAnswer(card, props.direction, props.fields, props.latinTyping, props.romanisationField);
     const g = gradeAnswer(
       expected,
       typingAnswer,
@@ -738,6 +749,21 @@ function StudySession(props: {
           {props.index + 1} / {props.cards.length}
         </span>
       </div>
+
+      {/* Live session stats */}
+      {(counts.again > 0 || counts.good > 0 || counts.easy > 0) && (
+        <div className="flex items-center justify-center gap-3 mb-3 text-xs">
+          <span className="flex items-center gap-1 text-[var(--accent-secondary)]">
+            <Check className="size-3" /> {counts.good + counts.easy}
+          </span>
+          {counts.hard > 0 && (
+            <span className="text-[var(--accent-warm)]">Hard: {counts.hard}</span>
+          )}
+          {counts.again > 0 && (
+            <span className="text-[var(--accent-danger)]">Again: {counts.again}</span>
+          )}
+        </div>
+      )}
 
       {/* Mode badge */}
       <div className="flex justify-center mb-4 gap-2">
@@ -950,12 +976,21 @@ function StudySession(props: {
         {/* Typing input (shows before flip) */}
         {!flipped && props.interaction === "typing" && (
           <div className="pc-card p-4">
-            <div className="section-title mb-2">
-              Type the{" "}
-              {isTargetFront
-                ? props.sourceLanguage
-                : props.targetLanguage}{" "}
-              answer
+            <div className="flex items-center justify-between mb-2">
+              <div className="section-title">
+                {props.latinTyping && props.romanisationField && !isTargetFront
+                  ? `Type in Latin script (${props.romanisationField})`
+                  : `Type the ${
+                      isTargetFront
+                        ? props.sourceLanguage
+                        : props.targetLanguage
+                    } answer`}
+              </div>
+              {props.latinTyping && props.romanisationField && !isTargetFront && (
+                <span className="pc-tag !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent">
+                  Romanisation mode
+                </span>
+              )}
             </div>
             <Input
               ref={typingInputRef}

@@ -45,6 +45,8 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     "contextLanguage",
     "strictAccents",
     "strictMode",
+    "latinTyping",
+    "romanisationField",
   ];
   const data: Record<string, unknown> = {};
   for (const k of allowed) {

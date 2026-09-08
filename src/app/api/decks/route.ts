@@ -14,6 +14,8 @@ const createDeckSchema = z.object({
   contextLanguage: z.enum(["target", "source"]).default("target"),
   strictAccents: z.boolean().default(true),
   strictMode: z.boolean().default(false),
+  latinTyping: z.boolean().default(false),
+  romanisationField: z.string().default(""),
 });
 
 // GET /api/decks — list user's decks with stats

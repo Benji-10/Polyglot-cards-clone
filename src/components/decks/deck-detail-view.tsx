@@ -8,6 +8,7 @@ import {
   Play,
   Pause,
   Settings2,
+  SlidersHorizontal,
   MoreVertical,
   Edit,
   Trash2,
@@ -71,6 +72,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { DeckFormDialog } from "@/components/decks/deck-form-dialog";
+import { DeckSettingsDialog } from "@/components/decks/deck-settings-dialog";
 import { DeckStatsBar } from "@/components/decks/decks-view";
 import { CardFormDialog } from "@/components/decks/card-form-dialog";
 import { QuickAddCard } from "@/components/decks/quick-add-card";
@@ -96,6 +98,7 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
   const { setView } = useUi();
   const [tab, setTab] = useState("collection");
   const [editDeckOpen, setEditDeckOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [cardFormOpen, setCardFormOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardData | null>(null);
 
@@ -151,6 +154,14 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
             onClick={() => setEditDeckOpen(true)}
           >
             <Settings2 className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            className="btn-secondary h-10"
+            onClick={() => setSettingsOpen(true)}
+            title="Deck settings"
+          >
+            <SlidersHorizontal className="size-4" />
           </Button>
         </div>
       </div>
@@ -244,6 +255,14 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
         open={editDeckOpen}
         onOpenChange={setEditDeckOpen}
         deck={deck}
+      />
+
+      {/* Deck settings dialog */}
+      <DeckSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        deck={deck}
+        fields={deck.fields}
       />
 
       {/* Card form */}

@@ -24,6 +24,8 @@ export function mapDeck(deck: Deck & { _count?: { cards: number } }): DeckData {
     contextLanguage: deck.contextLanguage as DeckData["contextLanguage"],
     strictAccents: deck.strictAccents,
     strictMode: deck.strictMode,
+    latinTyping: deck.latinTyping,
+    romanisationField: deck.romanisationField,
     createdAt: deck.createdAt.toISOString(),
     updatedAt: deck.updatedAt.toISOString(),
   };

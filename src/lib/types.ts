@@ -72,6 +72,8 @@ export interface DeckData {
   contextLanguage: ContextLanguage;
   strictAccents: boolean;
   strictMode: boolean;
+  latinTyping: boolean;
+  romanisationField: string;
   createdAt: string;
   updatedAt: string;
 }

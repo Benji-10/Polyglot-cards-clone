@@ -38,6 +38,8 @@ model Deck {
   contextLanguage String   @default("target") // "target" | "source"
   strictAccents   Boolean  @default(true)
   strictMode      Boolean  @default(false)
+  latinTyping     Boolean  @default(false) // typing mode matches against romanisation field
+  romanisationField String @default("") // which blueprint field key is the romanisation
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

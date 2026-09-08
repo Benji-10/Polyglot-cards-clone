@@ -406,3 +406,54 @@ Stage Summary:
 - Added full card tags system: create, display, filter by tag in study.
 - All APIs verified working via curl.
 - Next priorities: study session resume/progress, deck settings page, mobile UX improvements.
+
+---
+Task ID: 13 (deck settings page + latin typing + live session stats + styling)
+Agent: web-dev-review cron
+Task: Add deck settings dialog with latin typing mode, study session live stats, improve styling.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8/10 (excellent hierarchy, strong dark mode, chart empty when no data).
+- Dev server still unstable for browser testing; APIs verified via curl.
+
+New features:
+1. Deck Settings Dialog (deck-settings-dialog.tsx):
+   - New dedicated dialog for advanced deck configuration.
+   - Card Front setting (target word vs cloze sentence).
+   - Context on Card Front (context field vs cloze sentence).
+   - Strict accents toggle, strict mode toggle.
+   - Latin typing mode toggle — when enabled, typing mode matches against a romanisation field instead of the target script.
+   - Romanisation field selector — dropdown of text blueprint fields to use as the romanised answer.
+   - Uses keyed remount pattern (no set-state-in-effect).
+   - Added SlidersHorizontal icon button next to the edit (gear) button in deck detail view.
+
+2. Latin typing mode in study:
+   - Prisma schema: added latinTyping Boolean + romanisationField String to Deck model.
+   - db.ts: bumped schema version to 'v4-latinTyping'.
+   - types.ts: added latinTyping + romanisationField to DeckData.
+   - mappers.ts: mapDeck includes the new fields.
+   - API: POST /api/decks accepts latinTyping + romanisationField.
+   - API: PATCH /api/decks/[id] accepts latinTyping + romanisationField.
+   - study-view.tsx: getAnswer() now accepts latinTyping + romanisationField; when sourceToTarget + latinTyping + romanisationField set, returns the romanisation field value instead of card.word.
+   - Typing UI shows "Type in Latin script ({field})" + "Romanisation mode" badge when latin typing is active.
+
+3. Live session stats:
+   - Added a live stats bar below the progress bar showing correct count (green check), hard count (amber), and again count (red) — only appears once the user has rated at least one card.
+   - Helps users track their performance during the session.
+
+Styling improvements:
+- SlidersHorizontal icon button added to deck detail for settings access.
+- Deck settings dialog uses pc-card-elevated sections for visual grouping.
+- Romanisation field selector only appears when latin typing is enabled (animate-fade-in).
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- Deck settings API: ✓ verified via curl — PATCH with latinTyping:true, romanisationField:"reading", contextLanguage:"cloze" returns updated deck.
+- VLM dashboard: 8/10 (excellent hierarchy, strong dark mode execution).
+
+Stage Summary:
+- Added deck settings dialog with latin typing mode support.
+- Added live session stats during study.
+- All APIs verified working via curl.
+- Next priorities: study session resume, mobile drawer improvements, more AI features.
