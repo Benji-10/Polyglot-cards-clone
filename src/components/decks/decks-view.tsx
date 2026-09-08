@@ -1,8 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Search, MoreVertical, Edit, Trash2, Play } from "lucide-react";
-import { useDecks, useDeleteDeck } from "@/hooks/use-data";
+import {
+  Plus,
+  Search,
+  MoreVertical,
+  Edit,
+  Trash2,
+  Play,
+  Copy,
+  FolderPlus,
+} from "lucide-react";
+import { useDecks, useDeleteDeck, useDuplicateDeck } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -34,6 +43,7 @@ export function DecksView() {
   const { data: decks, isLoading } = useDecks();
   const { setView } = useUi();
   const deleteMut = useDeleteDeck();
+  const duplicateMut = useDuplicateDeck();
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [editDeck, setEditDeck] = useState<DeckWithStats | null>(null);
@@ -57,6 +67,19 @@ export function DecksView() {
       });
     }
     setDeleteDeck(null);
+  };
+
+  const handleDuplicate = async (deck: DeckWithStats) => {
+    try {
+      await duplicateMut.mutateAsync({ id: deck.id });
+      toast({ title: `Deck duplicated as "${deck.name} (copy)"` });
+    } catch (e) {
+      toast({
+        title: "Failed to duplicate deck",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -112,6 +135,7 @@ export function DecksView() {
               onStudy={() => setView({ name: "study", deckId: deck.id })}
               onEdit={() => setEditDeck(deck)}
               onDelete={() => setDeleteDeck(deck)}
+              onDuplicate={() => handleDuplicate(deck)}
             />
           ))}
         </div>
@@ -162,12 +186,14 @@ function DeckCard({
   onStudy,
   onEdit,
   onDelete,
+  onDuplicate,
 }: {
   deck: DeckWithStats;
   onOpen: () => void;
   onStudy: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onDuplicate: () => void;
 }) {
   const s = deck.stats;
   return (
@@ -200,6 +226,9 @@ function DeckCard({
             >
               <DropdownMenuItem onClick={onEdit} className="cursor-pointer">
                 <Edit className="size-4 mr-2" /> Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onDuplicate} className="cursor-pointer">
+                <Copy className="size-4 mr-2" /> Duplicate
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={onDelete}

@@ -71,6 +71,18 @@ export function useDeleteDeck() {
   });
 }
 
+export function useDuplicateDeck() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name?: string }) =>
+      api.post<DeckWithStats>(`/api/decks/${id}/duplicate`, { name }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+      qc.invalidateQueries({ queryKey: KEYS.stats });
+    },
+  });
+}
+
 // ---- Blueprint ----
 export function useBlueprint(deckId: string | null) {
   return useQuery({
@@ -268,6 +280,39 @@ export function useSeed() {
   return useMutation({
     mutationFn: () => api.post<{ seeded: number }>("/api/seed"),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+      qc.invalidateQueries({ queryKey: KEYS.stats });
+    },
+  });
+}
+
+// ---- AI Generation ----
+export function useGenerateCards(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (words: string[]) =>
+      api.post<{ cards: { word: string; fields: Record<string, unknown> }[] }>(
+        `/api/decks/${deckId}/generate`,
+        { words }
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+    },
+  });
+}
+
+// ---- Batch create cards (from AI generation or import) ----
+export function useBatchCreateCards(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      cards: { word: string; fields: Record<string, unknown> }[]
+    ) => api.post<{ created: number }>(`/api/decks/${deckId}/cards`, { cards }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
       qc.invalidateQueries({ queryKey: KEYS.decks });
       qc.invalidateQueries({ queryKey: KEYS.stats });
     },

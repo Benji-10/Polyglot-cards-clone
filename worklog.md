@@ -300,3 +300,61 @@ Additional fix (contrast root cause):
 - VLM verified: stat cards Good, chart axes Acceptable, sidebar Good (was: Poor/Acceptable/Good → now: Good/Acceptable/Good).
 
 Final state: 0 lint errors, all views verified, 4 new features added (shortcuts help, card suspend, reset SRS, command palette), contrast fixed across all themes.
+
+---
+Task ID: 11 (QA + deck duplication + AI generation + styling polish)
+Agent: web-dev-review cron
+Task: QA pass, add deck duplication feature, AI-powered card generation, edit-from-study, styling improvements.
+
+Work Log:
+QA findings:
+- Deck detail view works correctly but has a first-compile delay (~600ms) showing loading skeleton on first visit.
+- Dev server is unstable (dies between browser sessions); API endpoints verified via curl instead.
+- VLM rated dashboard 8/10 (cohesive theme, effective hierarchy, chart could be clearer).
+
+New features:
+1. Deck duplication:
+   - API: POST /api/decks/[id]/duplicate — clones deck settings, blueprint, and all cards (with fresh SRS state).
+   - Hook: useDuplicateDeck.
+   - UI: "Duplicate" menu item in deck card dropdown (between Edit and Delete).
+   - Verified via curl: POST returns new deck with copied name + cards.
+
+2. AI-powered card generation:
+   - API: POST /api/decks/[id]/generate — uses z-ai-web-dev-sdk LLM to generate flashcard content from a word list.
+   - Takes a list of target-language words + the deck's blueprint fields as context.
+   - LLM fills in translations, example sentences (with {{word}} cloze markers), phonetic annotations (furigana, IPA), definitions, and notes.
+   - Processes in batches of 10 words.
+   - Hook: useGenerateCards + useBatchCreateCards.
+   - UI: New "AI Generate" tab in deck detail (between Blueprint and Import/Export).
+   - AiGeneratePanel component: word list textarea, file upload, generate button with progress, preview of generated cards, and "Import All" button.
+   - Verified via curl: POST {words:["猫","犬","本"]} returned 3 cards with furigana, IPA, example sentences, definitions, and notes.
+
+3. Edit card from study session:
+   - Added a small edit pencil icon button on the top-right corner of the study card back.
+   - Clicking it navigates to the deck's collection view where the user can edit the card.
+   - Uses useUi().setView to navigate.
+
+4. Batch create cards:
+   - POST /api/decks/[id]/cards now accepts {cards: [{word, fields}, ...]} for bulk import.
+   - Hook: useBatchCreateCards.
+   - Used by both the AI generate panel and the import/export panel.
+
+Styling improvements:
+- Added :active states for buttons (btn-primary, btn-secondary) — press-down feedback.
+- Added transition properties to pc-card and pc-card-elevated for smooth hover effects.
+- Enhanced rating buttons with colored box-shadow glow on hover (again=danger glow, hard=warm glow, good=secondary glow, easy=primary glow).
+- Added :active scale-down for rating buttons.
+- Fixed quick-add card form button alignment (items-end → items-center).
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- AI Generate API: ✓ verified via curl — generates proper flashcard content for Japanese words.
+- Duplicate API: ✓ verified via curl — creates a copy of the deck with all cards.
+- Batch Create API: ✓ verified via curl — imports multiple cards at once.
+- VLM dashboard assessment: 8/10 (cohesive theme, effective hierarchy).
+
+Stage Summary:
+- Added 4 new features: deck duplication, AI card generation, edit-from-study, batch import.
+- Improved styling with active states, hover glows, and transitions.
+- All API endpoints verified working via curl (browser testing limited by server instability).
+- Next priorities: improve chart visualization (VLM noted it's sparse), add study session resume, add deck settings page.

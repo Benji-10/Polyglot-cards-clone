@@ -171,15 +171,22 @@
     transform: translateY(-1px);
     box-shadow: 0 0 28px var(--accent-glow);
   }
+  .btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
   .btn-secondary {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     color: var(--text-primary);
-    transition: border-color 0.15s ease, background 0.15s ease;
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
   }
   .btn-secondary:hover {
     border-color: var(--accent-primary);
     background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-elevated));
+  }
+  .btn-secondary:active {
+    transform: scale(0.98);
   }
   .btn-ghost {
     background: transparent;
@@ -205,12 +212,14 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   }
   .pc-card-elevated {
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-elevate);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   /* Tags / pills */
@@ -299,29 +308,36 @@
   .rating-btn:hover {
     transform: translateY(-2px);
   }
+  .rating-btn:active {
+    transform: translateY(0) scale(0.96);
+  }
   .rating-btn.again {
     border-color: color-mix(in srgb, var(--accent-danger) 50%, transparent);
   }
   .rating-btn.again:hover {
     background: color-mix(in srgb, var(--accent-danger) 16%, var(--bg-card));
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent-danger) 20%, transparent);
   }
   .rating-btn.hard {
     border-color: color-mix(in srgb, var(--accent-warm) 50%, transparent);
   }
   .rating-btn.hard:hover {
     background: color-mix(in srgb, var(--accent-warm) 16%, var(--bg-card));
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent-warm) 20%, transparent);
   }
   .rating-btn.good {
     border-color: color-mix(in srgb, var(--accent-secondary) 50%, transparent);
   }
   .rating-btn.good:hover {
     background: color-mix(in srgb, var(--accent-secondary) 16%, var(--bg-card));
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent-secondary) 20%, transparent);
   }
   .rating-btn.easy {
     border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
   }
   .rating-btn.easy:hover {
     background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-card));
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
 
   /* Cloze input */

@@ -16,6 +16,7 @@ import {
   LayoutGrid,
   RefreshCw,
   RotateCcw,
+  Sparkles,
 } from "lucide-react";
 import {
   useDeck,
@@ -75,6 +76,7 @@ import { CardFormDialog } from "@/components/decks/card-form-dialog";
 import { QuickAddCard } from "@/components/decks/quick-add-card";
 import { BlueprintEditor } from "@/components/decks/blueprint-editor";
 import { ImportExportPanel } from "@/components/decks/import-export-panel";
+import { AiGeneratePanel } from "@/components/decks/ai-generate-panel";
 import { RubyText } from "@/components/ruby-text";
 import { getLanguageFlag } from "@/lib/constants";
 import { fieldValueToString, parseCloze } from "@/lib/ruby";
@@ -189,6 +191,13 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
             Blueprint
           </TabsTrigger>
           <TabsTrigger
+            value="ai"
+            className="data-[state=active]:bg-[var(--accent-glow)]"
+          >
+            <Sparkles className="size-4 mr-1.5" />
+            AI Generate
+          </TabsTrigger>
+          <TabsTrigger
             value="import"
             className="data-[state=active]:bg-[var(--accent-glow)]"
           >
@@ -215,6 +224,14 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
 
         <TabsContent value="blueprint" className="mt-4">
           <BlueprintEditor deckId={deckId} fields={deck.fields} />
+        </TabsContent>
+
+        <TabsContent value="ai" className="mt-4">
+          <AiGeneratePanel
+            deckId={deckId}
+            targetLanguage={deck.targetLanguage}
+            sourceLanguage={deck.sourceLanguage}
+          />
         </TabsContent>
 
         <TabsContent value="import" className="mt-4">

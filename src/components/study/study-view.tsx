@@ -15,6 +15,7 @@ import {
   ArrowRight,
   ArrowLeftRight,
   HelpCircle,
+  Edit,
 } from "lucide-react";
 import { useDeck, useStudyCards, useReviewCard } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -456,6 +457,7 @@ function StudySession(props: {
   mode: "learn" | "freestyle";
 }) {
   const reviewMut = useReviewCard(props.deckId);
+  const { setView } = useUi();
   const card = props.cards[props.index];
   const [flipped, setFlipped] = useState(false);
   const [typingAnswer, setTypingAnswer] = useState("");
@@ -783,7 +785,16 @@ function StudySession(props: {
           </div>
 
           {/* BACK */}
-          <div className="card-face card-back pc-card-elevated rounded-2xl p-5 flex flex-col overflow-y-auto scrollbar-thin">
+          <div className="card-face card-back pc-card-elevated rounded-2xl p-5 flex flex-col overflow-y-auto scrollbar-thin relative">
+            {/* Edit card button */}
+            <button
+              onClick={() => setView({ name: "deck", deckId: props.deckId })}
+              className="absolute top-3 right-3 text-muted hover:text-[var(--accent-primary)] p-1 rounded transition-colors z-10"
+              aria-label="Edit this card"
+              title="Edit card"
+            >
+              <Edit className="size-3.5" />
+            </button>
             <div className="flex items-center gap-3 mb-3">
               <div
                 className={cn(

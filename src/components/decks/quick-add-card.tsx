@@ -98,7 +98,7 @@ export function QuickAddCard({
 
   return (
     <div className="pc-card-elevated rounded-xl p-4 mb-4">
-      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end">
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
         <div className="space-y-1.5">
           <Label className="text-xs text-muted">Word *</Label>
           <Input
