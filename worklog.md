@@ -558,3 +558,47 @@ Stage Summary:
 - Bulk Tag API verified working via curl.
 - VLM dashboard rating: 8/10 (excellent polish, CTA prominent, no bugs).
 - Next priorities: study session resume, mobile drawer improvements, more AI features.
+
+---
+Task ID: 16 (review forecast + maturity badge + styling polish)
+Agent: web-dev-review cron
+Task: Add review forecast chart to stats, card maturity badge to collection, improve styling.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8/10 → 8.5/10 (excellent hierarchy, strong dark mode, CTA prominent).
+- VLM noted chart area can look empty with sparse data (expected — app has limited review history).
+- Dev server unstable for sustained browser testing; APIs verified via curl.
+
+New features:
+1. Review forecast chart (stats page):
+   - API: GET /api/stats now returns a `forecast` array with 7 days of upcoming review counts.
+   - For each day, counts cards that are due on that day (new cards counted on day 0 only).
+   - Type: added `forecast: { date, count, isNew }[]` to OverviewStats.
+   - UI: "Upcoming Reviews" card on stats page with a 7-day bar chart.
+   - Each day shows: weekday label, date number, colored bar (red=today, purple=future, gray=none), and count below.
+   - Hover shows the count as a tooltip; bars scale relative to the max count.
+   - Verified via curl: forecast returns 26 cards today, 1 tomorrow, 4 in 2 days, etc.
+
+2. Card maturity badge (collection table):
+   - Cards with interval >= 21 days (mature) now show a ★ badge next to the state badge.
+   - Badge uses accent-secondary color (teal) with a tooltip "Mature card (interval ≥ 21 days)".
+   - Helps users quickly identify well-learned cards.
+
+Styling improvements:
+- Forecast chart: responsive 7-column grid with proportional bar heights.
+- Today's bar is highlighted in accent-danger (red) to stand out.
+- Maturity badge: small star with teal background, subtle but informative.
+- State + maturity badges wrapped in a flex container with gap-1.5.
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- Forecast API: ✓ verified via curl — returns 7 days of review counts (26 today, 1 tomorrow, 4 in 2 days, etc.).
+- VLM dashboard: 8.5/10 (excellent hierarchy, strong dark mode execution).
+
+Stage Summary:
+- Added review forecast chart to stats page (7-day upcoming reviews visualization).
+- Added card maturity badge (★) to collection table for cards with interval >= 21 days.
+- Forecast API verified working via curl.
+- VLM dashboard rating: 8.5/10.
+- Next priorities: study session resume, mobile drawer improvements, more AI features.

@@ -112,6 +112,58 @@ export function StatsView() {
         />
       </div>
 
+      {/* Review forecast (next 7 days) */}
+      {stats.forecast && stats.forecast.length > 0 && (
+        <Card className="pc-card mb-6">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-lg">Upcoming Reviews</h2>
+              <span className="text-xs text-muted">Next 7 days</span>
+            </div>
+            <div className="grid grid-cols-7 gap-2">
+              {stats.forecast.map((day) => {
+                const max = Math.max(...stats.forecast.map((d) => d.count), 1);
+                const height = (day.count / max) * 100;
+                const date = new Date(day.date);
+                const dayLabel = date.toLocaleDateString("en", { weekday: "short" }).slice(0, 2);
+                const dayNum = date.getDate();
+                const isToday = day.isNew;
+                return (
+                  <div key={day.date} className="flex flex-col items-center gap-1.5">
+                    <div className="text-[0.65rem] text-muted font-medium">{dayLabel}</div>
+                    <div className="text-xs font-medium">{dayNum}</div>
+                    <div className="w-full h-24 flex items-end justify-center">
+                      <div
+                        className="w-full max-w-[2.5rem] rounded-t-md transition-all hover:opacity-80 cursor-default relative group"
+                        style={{
+                          height: `${Math.max(height, 4)}%`,
+                          background: day.count === 0
+                            ? "var(--bg-elevated)"
+                            : isToday
+                            ? "var(--accent-danger)"
+                            : "var(--accent-primary)",
+                          minHeight: "4px",
+                        }}
+                        title={`${day.count} cards due`}
+                      >
+                        {day.count > 0 && (
+                          <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[0.6rem] text-muted opacity-0 group-hover:opacity-100 transition-opacity">
+                            {day.count}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className={cn("text-xs font-medium", day.count > 0 ? "text-[var(--text-primary)]" : "text-muted")}>
+                      {day.count}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Review heatmap (last 30 days) */}
       <Card className="pc-card mb-6">
         <CardContent className="p-5">

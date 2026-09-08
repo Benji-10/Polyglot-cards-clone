@@ -102,6 +102,28 @@ export async function GET(req: NextRequest) {
     count: stateMap[state],
   }));
 
+  // Review forecast for the next 7 days
+  const forecast: { date: string; count: number; isNew: boolean }[] = [];
+  for (let i = 0; i < 7; i++) {
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    let count = 0;
+    for (const deck of decks) {
+      for (const c of deck.cards) {
+        if (c.srsState === "new" && i === 0) {
+          count++;
+        } else if (c.srsState !== "new" && c.dueAt >= dayStart && c.dueAt < dayEnd) {
+          count++;
+        }
+      }
+    }
+    forecast.push({
+      date: dayStart.toISOString().slice(0, 10),
+      count,
+      isNew: i === 0,
+    });
+  }
+
   const stats: OverviewStats = {
     totalDecks: decks.length,
     totalCards,
@@ -114,6 +136,7 @@ export async function GET(req: NextRequest) {
     retentionRate,
     reviewsLast30Days,
     stateBreakdown,
+    forecast,
   };
   return NextResponse.json(stats);
 }

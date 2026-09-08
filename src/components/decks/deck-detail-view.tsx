@@ -508,12 +508,22 @@ function CardCollection({
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="secondary"
-                          className={cn("font-medium", st.cls)}
-                        >
-                          {st.label}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge
+                            variant="secondary"
+                            className={cn("font-medium", st.cls)}
+                          >
+                            {st.label}
+                          </Badge>
+                          {card.interval >= 21 && (
+                            <span
+                              className="pc-tag !text-[0.6rem] !py-0 !bg-[var(--accent-secondary)]/15 !text-[var(--accent-secondary)] !border-transparent"
+                              title="Mature card (interval ≥ 21 days)"
+                            >
+                              ★
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-xs text-muted hidden lg:table-cell">
                         {formatDue(card.dueAt, card.srsState)}

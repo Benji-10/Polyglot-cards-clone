@@ -187,4 +187,5 @@ export interface OverviewStats {
   retentionRate: number;
   reviewsLast30Days: { date: string; count: number; correct: number }[];
   stateBreakdown: { state: SrsState; count: number }[];
+  forecast: { date: string; count: number; isNew: boolean }[];
 }
