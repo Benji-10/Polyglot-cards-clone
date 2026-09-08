@@ -165,7 +165,7 @@ export function DashboardView() {
                 <div
                   key={d.id}
                   onClick={() => setView({ name: "study", deckId: d.id })}
-                  className="w-full pc-card p-3 flex items-center gap-3 hover:border-[var(--accent-primary)]/40 transition-colors text-left cursor-pointer"
+                  className="w-full pc-card pc-card-hover p-3 flex items-center gap-3 hover:border-[var(--accent-primary)]/40 text-left cursor-pointer"
                 >
                   <span className="text-xl">{getLanguageFlag(d.targetLanguage)}</span>
                   <div className="flex-1 min-w-0">
@@ -303,7 +303,7 @@ export function DashboardView() {
               <div
                 key={d.id}
                 onClick={() => setView({ name: "deck", deckId: d.id })}
-                className="pc-card p-4 text-left hover:border-[var(--accent-primary)]/40 transition-colors cursor-pointer"
+                className="pc-card pc-card-hover p-4 text-left hover:border-[var(--accent-primary)]/40 cursor-pointer"
               >
                 <div className="flex items-center gap-3 mb-3">
                   <span className="text-2xl">{getLanguageFlag(d.targetLanguage)}</span>

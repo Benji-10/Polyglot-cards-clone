@@ -514,3 +514,47 @@ Stage Summary:
 - Improved card flip animation with scale effect.
 - VLM rating improved: 8/10 → 8.5/10.
 - Next priorities: study session resume, mobile drawer improvements, more AI features.
+
+---
+Task ID: 15 (bulk tag assignment + card hover effects + styling polish)
+Agent: web-dev-review cron
+Task: Add bulk tag assignment for selected cards, card hover lift effects, improve styling.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8.5/10 (excellent contrast, "Start Studying" CTA prominent, no bugs).
+- VLM stats: 6/10 (beautiful UI but sparse data — heatmap shows only 2 active days, charts need real data to be useful).
+- Dev server still unstable for sustained browser testing; APIs verified via curl.
+
+New features:
+1. Bulk tag assignment for selected cards:
+   - API: POST /api/decks/[id]/cards/batch-tag — add or remove tags on multiple cards at once.
+   - Body: { cardIds: string[], tags: string[], mode: "add" | "remove" }
+   - Fetches all selected cards, parses their current tags (JSON array), merges/removes the new tags, and updates each card.
+   - Hook: useBatchTagCards.
+   - UI: "Tag" button in the bulk action bar (next to Delete), with a dedicated BulkTagDialog component.
+   - Dialog has: mode toggle (Add/Remove tags), tag pills with click-to-remove, tag input with Enter/comma to add, and apply button.
+   - Verified via curl: POST with cardIds + tags + mode=add returns {"updated":1}.
+
+2. Card hover lift effect:
+   - New `.pc-card-hover` CSS class: on hover, translateY(-2px) + shadow-elevate for a subtle lift.
+   - Applied to: deck cards in decks grid, due-now cards on dashboard, recent deck cards on dashboard.
+   - NOT applied to study flashcard (would interfere with flip animation) or stat cards.
+   - Removed redundant `transition-colors` class (already in pc-card base).
+
+Styling improvements:
+- Bulk action bar: improved layout with flex-1 spacer, consistent gap-2, Tag + Delete buttons with icons.
+- BulkTagDialog: mode toggle pills, tag pills with group-hover for remove indicator, proper label and input.
+- Added Label + Loader2 imports to deck-detail-view for the new dialog.
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- Bulk Tag API: ✓ verified via curl — {"updated":1} when tagging 1 card with "bulk-test".
+- VLM dashboard: 8/10 (CTA prominent, excellent contrast, clean layout, no bugs).
+
+Stage Summary:
+- Added bulk tag assignment feature (add/remove tags on multiple cards at once).
+- Added card hover lift effect on deck cards and dashboard cards.
+- Bulk Tag API verified working via curl.
+- VLM dashboard rating: 8/10 (excellent polish, CTA prominent, no bugs).
+- Next priorities: study session resume, mobile drawer improvements, more AI features.

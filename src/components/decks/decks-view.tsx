@@ -197,7 +197,7 @@ function DeckCard({
 }) {
   const s = deck.stats;
   return (
-    <Card className="pc-card overflow-hidden group hover:border-[var(--accent-primary)]/40 transition-colors">
+    <Card className="pc-card pc-card-hover overflow-hidden group hover:border-[var(--accent-primary)]/40">
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-3 min-w-0">

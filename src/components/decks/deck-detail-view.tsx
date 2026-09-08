@@ -18,6 +18,9 @@ import {
   RefreshCw,
   RotateCcw,
   Sparkles,
+  Tag,
+  X,
+  Loader2,
 } from "lucide-react";
 import {
   useDeck,
@@ -26,12 +29,14 @@ import {
   useUpdateCard,
   useResetCardSrs,
   useToggleSuspendCard,
+  useBatchTagCards,
   useBlueprint,
 } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -295,6 +300,7 @@ function CardCollection({
   const [sort, setSort] = useState("createdAt");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDelete, setBulkDelete] = useState(false);
+  const [bulkTagOpen, setBulkTagOpen] = useState(false);
   const { data, isLoading } = useCards(deckId, {
     ...(stateFilter ? { state: stateFilter } : {}),
     ...(search ? { search } : {}),
@@ -304,6 +310,7 @@ function CardCollection({
   const deleteMut = useDeleteCard(deckId);
   const resetSrsMut = useResetCardSrs(deckId);
   const suspendMut = useToggleSuspendCard(deckId);
+  const batchTagMut = useBatchTagCards(deckId);
   const { toast } = useToast();
 
   const cards = data?.cards || [];
@@ -365,7 +372,7 @@ function CardCollection({
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 mb-3 p-2.5 pc-card-elevated rounded-lg">
+        <div className="flex items-center gap-2 mb-3 p-2.5 pc-card-elevated rounded-lg">
           <span className="text-sm font-medium">{selected.size} selected</span>
           <Button
             size="sm"
@@ -375,12 +382,21 @@ function CardCollection({
           >
             Clear
           </Button>
+          <div className="flex-1" />
           <Button
             size="sm"
-            className="btn-danger h-8 ml-auto"
+            variant="ghost"
+            className="btn-secondary h-8 gap-1.5"
+            onClick={() => setBulkTagOpen(true)}
+          >
+            <Tag className="size-3.5" /> Tag
+          </Button>
+          <Button
+            size="sm"
+            className="btn-danger h-8 gap-1.5"
             onClick={() => setBulkDelete(true)}
           >
-            <Trash2 className="size-3.5 mr-1" /> Delete
+            <Trash2 className="size-3.5" /> Delete
           </Button>
         </div>
       )}
@@ -611,6 +627,37 @@ function CardCollection({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Bulk tag dialog */}
+      <BulkTagDialog
+        open={bulkTagOpen}
+        onOpenChange={setBulkTagOpen}
+        selectedCount={selected.size}
+        onApply={async (tags, mode) => {
+          try {
+            await batchTagMut.mutateAsync({
+              cardIds: [...selected],
+              tags,
+              mode,
+            });
+            toast({
+              title:
+                mode === "add"
+                  ? `Tagged ${selected.size} cards.`
+                  : `Removed tags from ${selected.size} cards.`,
+            });
+            setBulkTagOpen(false);
+            setSelected(new Set());
+          } catch (e) {
+            toast({
+              title: "Bulk tag failed",
+              description: (e as Error).message,
+              variant: "destructive",
+            });
+          }
+        }}
+        loading={batchTagMut.isPending}
+      />
     </div>
   );
 }
@@ -697,4 +744,128 @@ function formatDue(dueAt: string, state: SrsState): string {
   if (days === 1) return "Tomorrow";
   if (days < 30) return `${days}d`;
   return formatDistanceToNow(due, { addSuffix: false });
+}
+
+// Bulk tag dialog — add or remove tags from multiple selected cards.
+function BulkTagDialog({
+  open,
+  onOpenChange,
+  selectedCount,
+  onApply,
+  loading,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  selectedCount: number;
+  onApply: (tags: string[], mode: "add" | "remove") => void;
+  loading: boolean;
+}) {
+  const [tagInput, setTagInput] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [mode, setMode] = useState<"add" | "remove">("add");
+
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (t && !tags.includes(t)) setTags([...tags, t]);
+    setTagInput("");
+  };
+
+  const removeTag = (t: string) => setTags(tags.filter((x) => x !== t));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-surface border surface-border max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-display text-xl flex items-center gap-2">
+            <Tag className="size-5 text-[var(--accent-primary)]" />
+            Tag {selectedCount} cards
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          {/* Mode toggle */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setMode("add")}
+              className={cn(
+                "flex-1 px-3 py-2 rounded-lg text-sm transition-colors",
+                mode === "add"
+                  ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+                  : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+              )}
+            >
+              Add tags
+            </button>
+            <button
+              onClick={() => setMode("remove")}
+              className={cn(
+                "flex-1 px-3 py-2 rounded-lg text-sm transition-colors",
+                mode === "remove"
+                  ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+                  : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+              )}
+            >
+              Remove tags
+            </button>
+          </div>
+
+          {/* Current tags */}
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {tags.map((t) => (
+                <span
+                  key={t}
+                  className="pc-tag !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent cursor-pointer group"
+                  onClick={() => removeTag(t)}
+                  title="Click to remove"
+                >
+                  {t}
+                  <span className="ml-1 opacity-50 group-hover:opacity-100">×</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Tag input */}
+          <div className="space-y-1.5">
+            <Label>Tag name</Label>
+            <Input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === ",") {
+                  e.preventDefault();
+                  addTag();
+                }
+              }}
+              placeholder="Type a tag and press Enter..."
+              className="bg-elevated border surface-border h-9"
+              autoFocus
+            />
+            <p className="text-xs text-muted">
+              Press Enter or comma to add. Click a tag to remove it.
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => onOpenChange(false)} className="btn-ghost">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => onApply(tags, mode)}
+              disabled={loading || tags.length === 0}
+              className="btn-primary"
+            >
+              {loading ? (
+                <Loader2 className="size-4 mr-1 animate-spin" />
+              ) : (
+                <Tag className="size-4 mr-1" />
+              )}
+              {mode === "add" ? "Add Tags" : "Remove Tags"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }

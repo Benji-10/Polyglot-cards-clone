@@ -188,6 +188,31 @@ export function useDeleteCard(deckId: string) {
   });
 }
 
+export function useBatchTagCards(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      cardIds,
+      tags,
+      mode,
+    }: {
+      cardIds: string[];
+      tags: string[];
+      mode: "add" | "remove";
+    }) =>
+      api.post<{ updated: number }>(`/api/decks/${deckId}/cards/batch-tag`, {
+        cardIds,
+        tags,
+        mode,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
+      qc.invalidateQueries({ queryKey: ["tags", deckId] });
+    },
+  });
+}
+
 export function useResetCardSrs(deckId: string) {
   const qc = useQueryClient();
   return useMutation({

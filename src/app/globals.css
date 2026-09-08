@@ -214,6 +214,10 @@
     box-shadow: var(--shadow-card);
     transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   }
+  .pc-card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-elevate);
+  }
   .pc-card-elevated {
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
