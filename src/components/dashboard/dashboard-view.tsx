@@ -66,6 +66,43 @@ export function DashboardView() {
         </p>
       </div>
 
+      {/* Study Now CTA — prominent banner when there are due cards */}
+      {totalDue > 0 && dueDecks.length > 0 && (
+        <div
+          className="mb-8 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-slide-up"
+          style={{
+            background:
+              "linear-gradient(135deg, var(--accent-glow), color-mix(in srgb, var(--accent-secondary) 8%, transparent))",
+            border: "1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent)",
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="size-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
+              style={{ background: "var(--accent-glow)" }}
+            >
+              {getLanguageFlag(dueDecks[0].targetLanguage)}
+            </div>
+            <div>
+              <div className="text-sm text-secondary">Ready to study</div>
+              <div className="font-display text-lg font-semibold">
+                {dueDecks[0].name}
+              </div>
+              <div className="text-xs text-muted">
+                {dueDecks[0].stats.due} due · {dueDecks[0].stats.total} total cards
+              </div>
+            </div>
+          </div>
+          <Button
+            className="btn-primary h-11 px-6 gap-2 shrink-0"
+            onClick={() => setView({ name: "study", deckId: dueDecks[0].id })}
+          >
+            <Play className="size-4" />
+            Start Studying
+          </Button>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
         <StatCard

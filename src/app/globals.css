@@ -274,7 +274,7 @@
     transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .card-inner.flipped {
-    transform: rotateY(180deg);
+    transform: rotateY(180deg) scale(1.02);
   }
   .card-face {
     position: absolute;
@@ -286,6 +286,21 @@
   }
   .card-back {
     transform: rotateY(180deg);
+  }
+
+  /* Card content enter animation */
+  @keyframes cardContentEnter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-card-enter {
+    animation: cardContentEnter 0.3s ease-out both;
   }
 
   /* Rating buttons */

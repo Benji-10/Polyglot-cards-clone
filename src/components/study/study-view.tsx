@@ -691,6 +691,18 @@ function StudySession(props: {
       } else if (["1", "2", "3", "4"].includes(e.key) && flipped && props.interaction === "passive") {
         e.preventDefault();
         rate(Number(e.key) as Rating);
+      } else if (e.key === "s" || e.key === "S") {
+        // Skip card
+        e.preventDefault();
+        next();
+      } else if ((e.key === "p" || e.key === "P" || e.key === "ArrowLeft") && props.index > 0) {
+        // Previous card
+        e.preventDefault();
+        props.setIndex((i) => Math.max(0, i - 1));
+      } else if ((e.key === "ArrowRight") && props.index < props.cards.length - 1) {
+        // Next card (skip)
+        e.preventDefault();
+        props.setIndex((i) => Math.min(props.cards.length - 1, i + 1));
       }
     };
     window.addEventListener("keydown", handler);
@@ -1306,6 +1318,9 @@ function ShortcutsHelp() {
   const shortcuts = [
     { keys: "Space / Enter", action: "Flip card / submit answer / continue" },
     { keys: "1 2 3 4", action: "Grade Again / Hard / Good / Easy (passive)" },
+    { keys: "S", action: "Skip to next card" },
+    { keys: "P / ←", action: "Go to previous card" },
+    { keys: "→", action: "Go to next card (skip)" },
     { keys: "Enter", action: "Submit typing or cloze answer" },
     { keys: "Escape", action: "Exit session" },
     { keys: "?", action: "Toggle this shortcuts overlay" },

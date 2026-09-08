@@ -457,3 +457,60 @@ Stage Summary:
 - Added live session stats during study.
 - All APIs verified working via curl.
 - Next priorities: study session resume, mobile drawer improvements, more AI features.
+
+---
+Task ID: 14 (AI card enhance + study navigation + dashboard CTA + styling polish)
+Agent: web-dev-review cron
+Task: Verify AI card enhance, add study prev/next navigation + skip shortcut, dashboard "Start Studying" CTA, card flip animation polish.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8/10 (excellent contrast, clean layout, chart empty when no data).
+- Dev server unstable for sustained browser testing; APIs verified via curl.
+- Sidebar avatar clipping issue identified by VLM in previous round.
+
+Bug fixes:
+- Sidebar avatar clipping: added `overflow-hidden` to footer container, `shrink-0` to avatar + logout icon, increased padding to py-2.
+- Card flip animation: added subtle scale(1.02) on flipped state for a more tactile feel.
+- Added `cardContentEnter` keyframe animation + `.animate-card-enter` utility class.
+
+New features:
+1. AI Card Enhance (single card):
+   - API: POST /api/cards/[id]/enhance — uses z-ai-web-dev-sdk LLM to generate/improve a card's fields based on its blueprint.
+   - Takes the card's current field values as context, fills in empty fields, improves existing ones.
+   - Hook: useEnhanceCard.
+   - UI: "AI Enhance" button in card form dialog (only visible when editing an existing card), next to the word input.
+   - On success, updates the form with the AI-generated content.
+   - Verified via curl: enhanced "tagtest" card with furigana, IPA, example sentence, definition, and notes.
+
+2. Study session card navigation:
+   - Prev/Next chevron buttons in the study top bar (with disabled states at boundaries).
+   - Keyboard shortcuts: S = skip card, P or ← = previous card, → = next card.
+   - Updated keyboard shortcuts help overlay with all new shortcuts.
+
+3. Dashboard "Start Studying" CTA banner:
+   - Prominent gradient banner between greeting and stat cards.
+   - Shows the deck with the most due cards + a big "Start Studying" button.
+   - Only appears when there are due cards.
+   - Uses accent-glow gradient background with a subtle border.
+   - Includes deck flag, name, due count, and total count.
+
+Styling improvements:
+- Card flip: added scale(1.02) on flipped state for tactile depth.
+- Added cardContentEnter animation for smooth content transitions.
+- Sidebar footer: fixed avatar clipping with shrink-0 + overflow-hidden.
+- Dashboard CTA banner: gradient background with accent-glow, responsive flex layout.
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- AI Enhance API: ✓ verified via curl — enhanced card with furigana, IPA, example, definition, notes.
+- VLM dashboard: 8.5/10 (up from 8/10) — "Start Studying" CTA highly visible, excellent contrast, no visual bugs.
+
+Stage Summary:
+- Added AI card enhance feature (single card) with LLM-powered content generation.
+- Added study session card navigation (prev/next buttons + keyboard shortcuts).
+- Added dashboard "Start Studying" CTA banner.
+- Fixed sidebar avatar clipping.
+- Improved card flip animation with scale effect.
+- VLM rating improved: 8/10 → 8.5/10.
+- Next priorities: study session resume, mobile drawer improvements, more AI features.
