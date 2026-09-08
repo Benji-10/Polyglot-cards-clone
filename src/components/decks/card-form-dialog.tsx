@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useCreateCard, useUpdateCard } from "@/hooks/use-data";
+import { useCreateCard, useUpdateCard, useEnhanceCard } from "@/hooks/use-data";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Plus, Trash2, Check } from "lucide-react";
+import { Loader2, Plus, Trash2, Check, Sparkles } from "lucide-react";
 import type {
   BlueprintFieldDef,
   CardData,
@@ -68,6 +68,7 @@ function CardFormBody({
   const isEdit = !!card;
   const createMut = useCreateCard();
   const updateMut = useUpdateCard(deckId);
+  const enhanceMut = useEnhanceCard(deckId);
   const { toast } = useToast();
 
   const [word, setWord] = useState(card?.word ?? "");
@@ -157,6 +158,29 @@ function CardFormBody({
     }
   };
 
+  const handleEnhance = async () => {
+    if (!card) {
+      toast({ title: "Save the card first before enhancing", variant: "destructive" });
+      return;
+    }
+    if (!word.trim()) {
+      toast({ title: "Word is required for AI enhancement", variant: "destructive" });
+      return;
+    }
+    try {
+      const result = await enhanceMut.mutateAsync({ id: card.id });
+      // Update the form with the enhanced fields
+      setFieldValues(initialFieldValues(result.fields));
+      toast({ title: "Card enhanced with AI! ✨" });
+    } catch (e) {
+      toast({
+        title: "AI enhancement failed",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <>
       <DialogHeader>
@@ -166,25 +190,44 @@ function CardFormBody({
       </DialogHeader>
 
       <div className="space-y-3">
-        {/* Word (primary) */}
-        <div className="space-y-1.5">
-          <Label>Word / Phrase *</Label>
-          <Input
-            value={word}
-            onChange={(e) => setWord(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                handleSubmit();
-              }
-            }}
-            placeholder="Enter the target language word"
-            className={cn(
-              "bg-elevated border surface-border",
-              isCJK(word) && "font-cjk"
-            )}
-            autoFocus
-          />
+        {/* Word (primary) + AI Enhance */}
+        <div className="flex items-end gap-2">
+          <div className="flex-1 space-y-1.5">
+            <Label>Word / Phrase *</Label>
+            <Input
+              value={word}
+              onChange={(e) => setWord(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              placeholder="Enter the target language word"
+              className={cn(
+                "bg-elevated border surface-border",
+                isCJK(word) && "font-cjk"
+              )}
+              autoFocus
+            />
+          </div>
+          {isEdit && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleEnhance}
+              disabled={enhanceMut.isPending}
+              className="btn-secondary h-9 gap-1.5 shrink-0"
+              title="AI-enhance this card's content"
+            >
+              {enhanceMut.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="size-3.5 text-[var(--accent-primary)]" />
+              )}
+              AI Enhance
+            </Button>
+          )}
         </div>
 
         <Separator className="bg-[var(--border-subtle)]" />

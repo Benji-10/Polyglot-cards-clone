@@ -201,6 +201,19 @@ export function useResetCardSrs(deckId: string) {
   });
 }
 
+export function useEnhanceCard(deckId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, fields }: { id: string; fields?: string[] }) =>
+      api.post<CardData>(`/api/cards/${id}/enhance`, { fields }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
+      qc.invalidateQueries({ queryKey: KEYS.decks });
+    },
+  });
+}
+
 export function useToggleSuspendCard(deckId: string) {
   const qc = useQueryClient();
   return useMutation({

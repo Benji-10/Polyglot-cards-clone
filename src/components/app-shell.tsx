@@ -193,12 +193,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </ScrollArea>
 
         {/* User footer */}
-        <div className="border-t subtle-border p-3 shrink-0">
+        <div className="border-t subtle-border p-3 shrink-0 overflow-hidden">
           <button
             onClick={signOut}
-            className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-elevated transition-colors group"
+            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-elevated transition-colors group"
           >
-            <Avatar className="size-8">
+            <Avatar className="size-8 shrink-0">
               <AvatarFallback className="bg-elevated text-[0.7rem] font-medium">
                 {initials}
               </AvatarFallback>
@@ -211,7 +211,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {user?.email}
               </div>
             </div>
-            <LogOut className="size-4 text-muted group-hover:text-[var(--accent-danger)]" />
+            <LogOut className="size-4 text-muted group-hover:text-[var(--accent-danger)] shrink-0" />
           </button>
         </div>
       </aside>

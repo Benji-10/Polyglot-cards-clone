@@ -16,6 +16,8 @@ import {
   ArrowLeftRight,
   HelpCircle,
   Edit,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useDeck, useStudyCards, useReviewCard, useDeckTags } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
@@ -745,9 +747,31 @@ function StudySession(props: {
         <div className="flex-1 progress-track h-1.5">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
         </div>
-        <span className="text-xs text-muted font-mono whitespace-nowrap">
-          {props.index + 1} / {props.cards.length}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => props.setIndex((i) => Math.max(0, i - 1))}
+            disabled={props.index === 0}
+            className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded transition-colors"
+            aria-label="Previous card"
+            title="Previous card"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+          <span className="text-xs text-muted font-mono whitespace-nowrap">
+            {props.index + 1} / {props.cards.length}
+          </span>
+          <button
+            onClick={() =>
+              props.setIndex((i) => Math.min(props.cards.length - 1, i + 1))
+            }
+            disabled={props.index === props.cards.length - 1}
+            className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded transition-colors"
+            aria-label="Next card"
+            title="Next card (skip)"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
       </div>
 
       {/* Live session stats */}
