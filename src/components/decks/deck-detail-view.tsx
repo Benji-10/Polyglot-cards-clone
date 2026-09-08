@@ -78,6 +78,7 @@ import {
 } from "@/components/ui/tabs";
 import { DeckFormDialog } from "@/components/decks/deck-form-dialog";
 import { DeckSettingsDialog } from "@/components/decks/deck-settings-dialog";
+import { DeckStatsPanel } from "@/components/decks/deck-stats-panel";
 import { DeckStatsBar } from "@/components/decks/decks-view";
 import { CardFormDialog } from "@/components/decks/card-form-dialog";
 import { QuickAddCard } from "@/components/decks/quick-add-card";
@@ -188,6 +189,9 @@ export function DeckDetailView({ deckId }: { deckId: string }) {
           }
         />
       </div>
+
+      {/* Detailed deck statistics panel */}
+      <DeckStatsPanel deckId={deckId} />
 
       {/* Tabs */}
       <Tabs value={tab} onValueChange={setTab}>

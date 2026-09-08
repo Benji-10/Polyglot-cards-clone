@@ -100,6 +100,27 @@ export function useDeckTags(deckId: string | null) {
   });
 }
 
+export interface DeckStatsData {
+  totalCards: number;
+  stateBreakdown: { state: string; count: number }[];
+  averageInterval: number;
+  matureCount: number;
+  dueCount: number;
+  seenCount: number;
+  suspendedCount: number;
+  retentionRate: number;
+  totalReviews: number;
+  correctReviews: number;
+}
+
+export function useDeckStats(deckId: string | null) {
+  return useQuery({
+    queryKey: deckId ? ["deckStats", deckId] : ["deckStats", "none"],
+    queryFn: () => api.get<DeckStatsData>(`/api/decks/${deckId}/stats`),
+    enabled: !!deckId,
+  });
+}
+
 export function useSaveBlueprint() {
   const qc = useQueryClient();
   return useMutation({

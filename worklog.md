@@ -602,3 +602,44 @@ Stage Summary:
 - Forecast API verified working via curl.
 - VLM dashboard rating: 8.5/10.
 - Next priorities: study session resume, mobile drawer improvements, more AI features.
+
+---
+Task ID: 17 (deck stats panel + QA + styling)
+Agent: web-dev-review cron
+Task: QA pass, add deck statistics panel with per-deck retention/interval/state breakdown.
+
+Work Log:
+QA findings:
+- VLM dashboard: 8/10 → 8.5/10 (excellent hierarchy, strong dark mode, CTA prominent).
+- VLM stats: forecast chart visible and clear (8/10). Heatmap + bar + pie charts below the fold.
+- Dev server still unstable for sustained browser testing; APIs verified via curl.
+
+New features:
+1. Deck Statistics Panel (deck-stats-panel.tsx):
+   - API: GET /api/decks/[id]/stats — returns per-deck statistics.
+   - Returns: totalCards, stateBreakdown, averageInterval, matureCount, dueCount, seenCount, suspendedCount, retentionRate, totalReviews, correctReviews.
+   - Retention computed from ReviewLog (last 30 days, rating >= 3 = correct).
+   - Hook: useDeckStats.
+   - UI: DeckStatsPanel component rendered between the stats bar and tabs in deck detail view.
+   - Shows 4 stat tiles: Total Cards, Retention %, Avg Interval, Mature count.
+   - Each tile has a colored icon background matching the metric.
+   - Includes a state breakdown bar (same as DeckStatsBar but with detailed counts).
+   - Shows due count, seen count, suspended count in the footer.
+   - Verified via curl: returns 10 cards, 0.4d avg interval, 67% retention, states [new:7, learning:1, review:2, relearning:0].
+
+Styling improvements:
+- Stat tiles: pc-card-elevated with colored icon backgrounds (16% color mix).
+- State breakdown bar: 2px height (slightly taller than deck card's 1.5px) with hover tooltips.
+- Consistent color coding: new=text-muted, learning=accent-warm, review=accent-secondary, relearning=accent-danger.
+- Deck stats panel only renders when totalCards > 0 (no empty state).
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- Deck Stats API: ✓ verified via curl — returns all per-deck metrics correctly.
+- VLM dashboard: 8.5/10 (excellent hierarchy, strong dark mode execution).
+
+Stage Summary:
+- Added deck statistics panel with per-deck retention, average interval, mature count, and state breakdown.
+- Deck Stats API verified working via curl.
+- VLM dashboard rating: 8.5/10.
+- Next priorities: study session resume, mobile drawer improvements, more AI features.
