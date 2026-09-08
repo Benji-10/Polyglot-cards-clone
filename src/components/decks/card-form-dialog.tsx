@@ -74,7 +74,21 @@ function CardFormBody({
   const [fieldValues, setFieldValues] = useState<Record<string, string>>(
     () => initialFieldValues(card?.fields ?? {})
   );
+  const [tags, setTags] = useState<string[]>(card?.tags ?? []);
+  const [tagInput, setTagInput] = useState("");
   const [saved, setSaved] = useState(false);
+
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (t && !tags.includes(t)) {
+      setTags([...tags, t]);
+    }
+    setTagInput("");
+  };
+
+  const removeTag = (t: string) => {
+    setTags(tags.filter((x) => x !== t));
+  };
 
   // Build the structured fields object matching the real app's shapes:
   //  - plain text → string
@@ -121,6 +135,7 @@ function CardFormBody({
           id: card.id,
           word: word.trim(),
           fields: cleanFields,
+          tags,
         });
         toast({ title: "Card updated." });
       } else {
@@ -128,6 +143,7 @@ function CardFormBody({
           deckId,
           word: word.trim(),
           fields: cleanFields,
+          tags,
         });
         toast({ title: "Card added!" });
       }
@@ -184,6 +200,39 @@ function CardFormBody({
             }
           />
         ))}
+
+        {/* Tags */}
+        <div className="space-y-1.5">
+          <Label className="text-sm">Tags</Label>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {tags.map((t) => (
+              <span
+                key={t}
+                className="pc-tag !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent cursor-pointer group"
+                onClick={() => removeTag(t)}
+                title="Click to remove"
+              >
+                {t}
+                <span className="ml-1 opacity-50 group-hover:opacity-100">×</span>
+              </span>
+            ))}
+          </div>
+          <Input
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                addTag();
+              }
+            }}
+            placeholder="Add a tag and press Enter..."
+            className="bg-elevated border surface-border h-9 text-sm"
+          />
+          <p className="text-xs text-muted">
+            Press Enter or comma to add. Click a tag to remove it.
+          </p>
+        </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="ghost" onClick={onDone} className="btn-ghost">

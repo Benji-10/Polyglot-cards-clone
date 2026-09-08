@@ -27,10 +27,20 @@ export function QuickAddCard({
   const [word, setWord] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const [saved, setSaved] = useState(false);
 
   const setField = (k: string, v: string) =>
     setFieldValues((p) => ({ ...p, [k]: v }));
+
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (t && !tags.includes(t)) setTags([...tags, t]);
+    setTagInput("");
+  };
+
+  const removeTag = (t: string) => setTags(tags.filter((x) => x !== t));
 
   const buildFields = (): CardFields => {
     const out: CardFields = {};
@@ -71,9 +81,11 @@ export function QuickAddCard({
         deckId,
         word: word.trim(),
         fields: buildFields(),
+        tags,
       });
       setWord("");
       setFieldValues({});
+      setTags([]);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
       if (!expanded) {
@@ -230,6 +242,34 @@ export function QuickAddCard({
                   </div>
                 );
               })}
+              {/* Tags input in expanded mode */}
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">Tags</Label>
+                <div className="flex flex-wrap gap-1 mb-1.5">
+                  {tags.map((t) => (
+                    <span
+                      key={t}
+                      className="pc-tag !text-[0.65rem] !py-0 !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent cursor-pointer group"
+                      onClick={() => removeTag(t)}
+                    >
+                      {t}
+                      <span className="ml-0.5 opacity-50 group-hover:opacity-100">×</span>
+                    </span>
+                  ))}
+                </div>
+                <Input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      addTag();
+                    }
+                  }}
+                  placeholder="Add tag, press Enter..."
+                  className="bg-elevated border surface-border h-7 text-xs"
+                />
+              </div>
             </div>
           )}
         </>

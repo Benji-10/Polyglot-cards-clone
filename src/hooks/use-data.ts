@@ -92,6 +92,14 @@ export function useBlueprint(deckId: string | null) {
   });
 }
 
+export function useDeckTags(deckId: string | null) {
+  return useQuery({
+    queryKey: deckId ? ["tags", deckId] : ["tags", "none"],
+    queryFn: () => api.get<{ tags: string[] }>(`/api/decks/${deckId}/tags`),
+    enabled: !!deckId,
+  });
+}
+
 export function useSaveBlueprint() {
   const qc = useQueryClient();
   return useMutation({
@@ -128,11 +136,14 @@ export function useCreateCard() {
       deckId,
       word,
       fields,
+      tags,
     }: {
       deckId: string;
       word: string;
       fields: Record<string, unknown>;
-    }) => api.post<CardData>(`/api/decks/${deckId}/cards`, { word, fields }),
+      tags?: string[];
+    }) =>
+      api.post<CardData>(`/api/decks/${deckId}/cards`, { word, fields, tags }),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: KEYS.cards(vars.deckId) });
       qc.invalidateQueries({ queryKey: KEYS.deck(vars.deckId) });
@@ -149,11 +160,13 @@ export function useUpdateCard(deckId: string) {
       id,
       word,
       fields,
+      tags,
     }: {
       id: string;
       word?: string;
       fields?: Record<string, unknown>;
-    }) => api.patch<CardData>(`/api/cards/${id}`, { word, fields }),
+      tags?: string[];
+    }) => api.patch<CardData>(`/api/cards/${id}`, { word, fields, tags }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEYS.cards(deckId) });
       qc.invalidateQueries({ queryKey: KEYS.deck(deckId) });
@@ -205,7 +218,7 @@ export function useToggleSuspendCard(deckId: string) {
 // ---- Study ----
 export function useStudyCards(
   deckId: string | null,
-  params: { mode: string; pool?: string; randomise?: boolean; limit?: number }
+  params: { mode: string; pool?: string; randomise?: boolean; limit?: number; tag?: string | null }
 ) {
   return useQuery({
     queryKey: deckId
@@ -217,6 +230,7 @@ export function useStudyCards(
       if (params.pool) sp.set("pool", params.pool);
       if (params.randomise) sp.set("randomise", "true");
       if (params.limit) sp.set("limit", String(params.limit));
+      if (params.tag) sp.set("tag", params.tag);
       return api.get<{ cards: CardData[]; total: number }>(
         `/api/decks/${deckId}/study?${sp.toString()}`
       );

@@ -2,14 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveServerUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { mapCard } from "@/lib/mappers";
-import { z } from "zod";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const cardSchema = z.object({
-  word: z.string().min(1),
-  fields: z.record(z.any()).default({}),
-});
 
 // GET /api/decks/[id]/cards?state=&search=&sort=&limit=&offset=
 export async function GET(req: NextRequest, { params }: Ctx) {
@@ -67,10 +61,11 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (Array.isArray(body.cards)) {
     const rows = body.cards
       .filter((c: { word?: string }) => c && c.word)
-      .map((c: { word: string; fields?: unknown }) => ({
+      .map((c: { word: string; fields?: unknown; tags?: string[] }) => ({
         deckId: id,
         word: c.word,
         fields: JSON.stringify(c.fields || {}),
+        tags: JSON.stringify(c.tags || []),
       }));
     if (!rows.length)
       return NextResponse.json({ created: 0 }, { status: 200 });
@@ -78,15 +73,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     return NextResponse.json({ created: rows.length });
   }
 
-  const parsed = cardSchema.safeParse(body);
-  if (!parsed.success)
+  if (!body.word || typeof body.word !== "string")
     return NextResponse.json({ error: "word is required" }, { status: 400 });
 
   const card = await db.card.create({
     data: {
       deckId: id,
-      word: parsed.data.word,
-      fields: JSON.stringify(parsed.data.fields || {}),
+      word: body.word,
+      fields: JSON.stringify(body.fields || {}),
+      tags: JSON.stringify(body.tags || []),
     },
   });
   return NextResponse.json(mapCard(card));

@@ -66,6 +66,7 @@ model Card {
   deck          Deck      @relation(fields: [deckId], references: [id], onDelete: Cascade)
   word          String
   fields        String    @default("{}") // JSON: { [key]: string | {text,annotations} | [{text,annotations}] }
+  tags          String    @default("[]") // JSON array of tag strings
   // FSRS-5 SRS state
   srsState      String    @default("new") // "new" | "learning" | "review" | "relearning"
   stability     Float     @default(0)

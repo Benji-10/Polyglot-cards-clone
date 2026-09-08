@@ -88,6 +88,7 @@ export function mapCard(card: Card): CardData {
     deckId: card.deckId,
     word: card.word,
     fields: JSON.parse(card.fields) as CardFields,
+    tags: JSON.parse(card.tags || "[]") as string[],
     srsState: card.srsState as CardData["srsState"],
     stability: card.stability,
     difficulty: card.difficulty,

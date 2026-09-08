@@ -413,6 +413,7 @@ function CardCollection({
                     </TableHead>
                   ))}
                   <TableHead className="font-medium">State</TableHead>
+                  <TableHead className="font-medium hidden lg:table-cell">Tags</TableHead>
                   <TableHead className="font-medium hidden lg:table-cell">Due</TableHead>
                   <TableHead className="w-10"></TableHead>
                 </TableRow>
@@ -454,6 +455,23 @@ function CardCollection({
                           {renderFieldPreview(card.fields[f.key])}
                         </TableCell>
                       ))}
+                      <TableCell className="hidden lg:table-cell">
+                        <div className="flex flex-wrap gap-1 max-w-[150px]">
+                          {card.tags?.slice(0, 3).map((t) => (
+                            <span
+                              key={t}
+                              className="pc-tag !text-[0.6rem] !py-0 !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                          {card.tags?.length > 3 && (
+                            <span className="text-[0.6rem] text-muted">
+                              +{card.tags.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <Badge
                           variant="secondary"

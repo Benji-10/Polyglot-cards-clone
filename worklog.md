@@ -358,3 +358,51 @@ Stage Summary:
 - Improved styling with active states, hover glows, and transitions.
 - All API endpoints verified working via curl (browser testing limited by server instability).
 - Next priorities: improve chart visualization (VLM noted it's sparse), add study session resume, add deck settings page.
+
+---
+Task ID: 12 (chart improvements + card tags system + bug fix)
+Agent: web-dev-review cron
+Task: Improve chart visualization, add card tags system, fix zod v4 crash.
+
+Work Log:
+QA findings:
+- VLM: heatmap empty state looked "broken" when no reviews — cells blended with background.
+- VLM: bar chart not visible without scrolling (empty state needed).
+- Dev log: card creation POST returning 500 — zod v4 `z.record(z.any())` crashes with "Cannot read properties of undefined (reading '_zod')".
+
+Bug fixes:
+- Removed zod schema from cards POST route (z.record(z.any()) incompatible with zod v4). Replaced with manual validation: `if (!body.word || typeof body.word !== "string")`.
+- Heatmap: empty cells now have `border border-[var(--border-subtle)]` instead of filled background, so they're visually distinct from "failed to load".
+- Heatmap: added empty state with 📊 icon + "No review activity yet" message when totalReviews === 0.
+- Heatmap: added summary text "X active days · Y reviews" next to the legend.
+- Bar chart: added empty state with 📈 icon + "No reviews yet" message when totalReviews === 0.
+
+New feature: Card Tags System
+- Prisma schema: added `tags String @default("[]")` (JSON array) to Card model + db push.
+- db.ts: bumped schema version to 'v3-tags' to force PrismaClient recreation.
+- types.ts: added `tags: string[]` to CardData interface.
+- mappers.ts: mapCard now parses tags JSON.
+- API: POST /api/decks/[id]/cards accepts `tags` field (single + batch).
+- API: PATCH /api/cards/[id] accepts `tags` field.
+- API: GET /api/decks/[id]/study?tag= filters cards by tag.
+- API: GET /api/decks/[id]/tags — returns all unique tags in a deck.
+- Hooks: useCreateCard/useUpdateCard accept `tags`, useDeckTags hook added, useStudyCards accepts `tag` param.
+- Card form (card-form-dialog.tsx): tag input with add-on-Enter, click-to-remove tags, displayed as purple pills.
+- Quick-add form (quick-add-card.tsx): tag input in expanded section.
+- Collection table: new Tags column showing up to 3 tag pills + "+N" overflow.
+- Study setup: tag filter pills ("All tags" + each tag) — select to filter study session.
+- Study card back: tags displayed as small pills next to the word.
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- Create card with tags API: ✓ verified via curl — returns card with tags:["vocab","easy"].
+- Get tags API: ✓ verified via curl — returns {"tags":["easy","vocab"]}.
+- Study with tag filter: ✓ verified via curl — ?tag=vocab returns only cards tagged "vocab".
+- VLM stats assessment: 8/10 (heatmap empty state handled well, summary text clear, high polish).
+
+Stage Summary:
+- Fixed zod v4 crash that prevented card creation.
+- Improved chart empty states (heatmap + bar chart) with icons and helpful messages.
+- Added full card tags system: create, display, filter by tag in study.
+- All APIs verified working via curl.
+- Next priorities: study session resume/progress, deck settings page, mobile UX improvements.

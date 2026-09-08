@@ -17,7 +17,7 @@ import {
   HelpCircle,
   Edit,
 } from "lucide-react";
-import { useDeck, useStudyCards, useReviewCard } from "@/hooks/use-data";
+import { useDeck, useStudyCards, useReviewCard, useDeckTags } from "@/hooks/use-data";
 import { useUi } from "@/store/ui-store";
 import { useAppSettings } from "@/components/providers";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +54,7 @@ type Direction = "targetToSource" | "sourceToTarget";
 
 export function StudyView({ deckId }: { deckId: string }) {
   const { data: deck, isLoading } = useDeck(deckId);
+  const { data: tagsData } = useDeckTags(deckId);
   const { setView } = useUi();
   const { settings } = useAppSettings();
   const { toast } = useToast();
@@ -66,6 +67,7 @@ export function StudyView({ deckId }: { deckId: string }) {
   const [batchSize, setBatchSize] = useState(settings.defaultBatchSize || 20);
   const [randomise, setRandomise] = useState(false);
   const [pool, setPool] = useState<"all" | "seen" | "unseen">("all");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("setup");
 
   const { data: studyData, isLoading: cardsLoading } = useStudyCards(deckId, {
@@ -73,6 +75,7 @@ export function StudyView({ deckId }: { deckId: string }) {
     pool: mode === "freestyle" ? pool : undefined,
     randomise,
     limit: batchSize,
+    tag: selectedTag,
   });
 
   const [queue, setQueue] = useState<CardData[]>([]);
@@ -137,6 +140,9 @@ export function StudyView({ deckId }: { deckId: string }) {
           setRandomise={setRandomise}
           pool={pool}
           setPool={setPool}
+          tags={tagsData?.tags || []}
+          selectedTag={selectedTag}
+          setSelectedTag={setSelectedTag}
           dueCount={deck.stats?.due || 0}
           totalCards={studyData?.total || 0}
           loading={cardsLoading}
@@ -192,6 +198,9 @@ function StudySetup(props: {
   setRandomise: (b: boolean) => void;
   pool: "all" | "seen" | "unseen";
   setPool: (p: "all" | "seen" | "unseen") => void;
+  tags: string[];
+  selectedTag: string | null;
+  setSelectedTag: (t: string | null) => void;
   dueCount: number;
   totalCards: number;
   loading: boolean;
@@ -334,6 +343,40 @@ function StudySetup(props: {
             </div>
           )}
         </div>
+
+        {/* Tag filter */}
+        {props.tags.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>Filter by tag</Label>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => props.setSelectedTag(null)}
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-xs transition-colors",
+                  props.selectedTag === null
+                    ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+                    : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+                )}
+              >
+                All tags
+              </button>
+              {props.tags.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => props.setSelectedTag(t)}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-xs transition-colors",
+                    props.selectedTag === t
+                      ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+                      : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <label className="flex items-center justify-between cursor-pointer">
           <div>
@@ -806,6 +849,18 @@ function StudySession(props: {
               </div>
               {card.interval > 0 && (
                 <span className="pc-tag">{formatIntervalDays(card.interval)} interval</span>
+              )}
+              {card.tags?.length > 0 && (
+                <div className="flex flex-wrap gap-1 ml-1">
+                  {card.tags.slice(0, 3).map((t) => (
+                    <span
+                      key={t}
+                      className="pc-tag !text-[0.6rem] !py-0 !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
               )}
               {lastResult && props.interaction !== "passive" && (
                 <span

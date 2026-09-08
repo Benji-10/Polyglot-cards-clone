@@ -33,6 +33,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const data: Record<string, unknown> = {};
   if (typeof body.word === "string") data.word = body.word;
   if (body.fields !== undefined) data.fields = JSON.stringify(body.fields || {});
+  if (Array.isArray(body.tags)) data.tags = JSON.stringify(body.tags);
   const updated = await db.card.update({ where: { id }, data });
   return NextResponse.json(mapCard(updated));
 }

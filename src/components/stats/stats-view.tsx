@@ -128,6 +128,15 @@ export function StatsView() {
         <Card className="pc-card">
           <CardContent className="p-5">
             <h2 className="font-display text-lg mb-4">Reviews per Day</h2>
+            {totalReviews === 0 ? (
+              <div className="h-56 flex flex-col items-center justify-center text-center">
+                <div className="text-3xl mb-2 opacity-50">📈</div>
+                <p className="text-sm text-secondary">No reviews yet</p>
+                <p className="text-xs text-muted mt-1">
+                  Your daily review chart will appear here.
+                </p>
+              </div>
+            ) : (
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={reviewsData}>
@@ -159,6 +168,7 @@ export function StatsView() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            )}
           </CardContent>
         </Card>
 
@@ -291,6 +301,23 @@ function Heatmap({
 }) {
   // 5x6 grid of the last 30 days (most recent on the right)
   const max = Math.max(1, ...data.map((d) => d.reviews));
+  const totalReviews = data.reduce((a, d) => a + d.reviews, 0);
+  const activeDays = data.filter((d) => d.reviews > 0).length;
+
+  if (totalReviews === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center">
+        <div className="text-3xl mb-2 opacity-50">📊</div>
+        <p className="text-sm text-secondary font-medium">
+          No review activity yet
+        </p>
+        <p className="text-xs text-muted mt-1">
+          Start studying to see your progress here!
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="grid grid-cols-10 sm:grid-cols-15 gap-1.5">
@@ -298,7 +325,7 @@ function Heatmap({
           const intensity = d.reviews / max;
           const bg =
             d.reviews === 0
-              ? "var(--bg-elevated)"
+              ? "transparent"
               : `color-mix(in srgb, var(--accent-primary) ${
                   25 + intensity * 75
                 }%, var(--bg-elevated))`;
@@ -306,19 +333,28 @@ function Heatmap({
             <div
               key={d.date}
               title={`${d.date}: ${d.reviews} reviews (${d.correct} correct)`}
-              className="aspect-square rounded-sm transition-transform hover:scale-110"
+              className={cn(
+                "aspect-square rounded-sm transition-all hover:scale-110 cursor-default",
+                d.reviews === 0 && "border border-[var(--border-subtle)]"
+              )}
               style={{ background: bg }}
             />
           );
         })}
       </div>
-      <div className="flex items-center justify-end gap-1.5 mt-3 text-xs text-muted">
-        <span>Less</span>
-        <div className="size-2.5 rounded-sm" style={{ background: "var(--bg-elevated)" }} />
-        <div className="size-2.5 rounded-sm" style={{ background: "color-mix(in srgb, var(--accent-primary) 40%, var(--bg-elevated))" }} />
-        <div className="size-2.5 rounded-sm" style={{ background: "color-mix(in srgb, var(--accent-primary) 70%, var(--bg-elevated))" }} />
-        <div className="size-2.5 rounded-sm" style={{ background: "var(--accent-primary)" }} />
-        <span>More</span>
+      <div className="flex items-center justify-between mt-3 text-xs text-muted">
+        <span>
+          {activeDays} active {activeDays === 1 ? "day" : "days"} ·{" "}
+          {totalReviews} reviews
+        </span>
+        <div className="flex items-center gap-1.5">
+          <span>Less</span>
+          <div className="size-2.5 rounded-sm border border-[var(--border-subtle)]" />
+          <div className="size-2.5 rounded-sm" style={{ background: "color-mix(in srgb, var(--accent-primary) 40%, var(--bg-elevated))" }} />
+          <div className="size-2.5 rounded-sm" style={{ background: "color-mix(in srgb, var(--accent-primary) 70%, var(--bg-elevated))" }} />
+          <div className="size-2.5 rounded-sm" style={{ background: "var(--accent-primary)" }} />
+          <span>More</span>
+        </div>
       </div>
     </div>
   );

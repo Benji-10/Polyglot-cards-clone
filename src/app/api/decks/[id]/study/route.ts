@@ -5,7 +5,7 @@ import { mapCard } from "@/lib/mappers";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-// GET /api/decks/[id]/study?mode=learn|freestyle&pool=all|seen|unseen&limit=
+// GET /api/decks/[id]/study?mode=learn|freestyle&pool=all|seen|unseen&limit=&tag=
 export async function GET(req: NextRequest, { params }: Ctx) {
   const user = await resolveServerUser(req.headers);
   const { id } = await params;
@@ -17,6 +17,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const pool = url.searchParams.get("pool") || "all";
   const randomise = url.searchParams.get("randomise") === "true";
   const limit = Math.min(500, Number(url.searchParams.get("limit") || 50));
+  const tag = url.searchParams.get("tag");
 
   let where: Record<string, unknown> = { deckId: id, suspended: false };
   if (mode === "learn") {
@@ -32,6 +33,18 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   }
 
   let cards = await db.card.findMany({ where, take: limit });
+
+  // Filter by tag (tags stored as JSON array string)
+  if (tag) {
+    cards = cards.filter((c) => {
+      try {
+        const tags = JSON.parse(c.tags || "[]") as string[];
+        return tags.includes(tag);
+      } catch {
+        return false;
+      }
+    });
+  }
   if (randomise) {
     cards = cards
       .map((c) => ({ c, k: Math.random() }))

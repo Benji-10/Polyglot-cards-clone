@@ -97,6 +97,7 @@ export interface CardData {
   deckId: string;
   word: string;
   fields: CardFields;
+  tags: string[];
   srsState: SrsState;
   stability: number;
   difficulty: number;

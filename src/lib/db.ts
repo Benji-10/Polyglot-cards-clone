@@ -6,7 +6,7 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 // Track schema version so we recreate the client when the schema changes.
-const currentVersion = 'v2-suspended'
+const currentVersion = 'v3-tags'
 
 if (
   process.env.NODE_ENV !== 'production' &&
