@@ -1,0 +1,120 @@
+// Polyglot Cards — Prisma schema
+// Works with SQLite (local dev) and PostgreSQL (Neon production).
+// To switch to Neon: set DATABASE_URL to your Neon connection string and
+// change the provider below to "postgresql".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Local dev: "sqlite". Production (Netlify + Neon): "postgresql".
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  netlifyId   String?  @unique // Netlify Identity user id (sub)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  decks       Deck[]
+  reviewLogs  ReviewLog[]
+  settings    UserSetting[]
+}
+
+model Deck {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  description     String   @default("")
+  sourceLanguage  String   @default("English")
+  targetLanguage  String   @default("Japanese")
+  cardDirection   String   @default("target") // "target" | "cloze"
+  contextLanguage String   @default("target") // "target" | "source"
+  strictAccents   Boolean  @default(true)
+  strictMode      Boolean  @default(false)
+  latinTyping     Boolean  @default(false) // typing mode matches against romanisation field
+  romanisationField String @default("") // which blueprint field key is the romanisation
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  fields          BlueprintField[]
+  cards           Card[]
+}
+
+model BlueprintField {
+  id          String   @id @default(cuid())
+  deckId      String
+  deck        Deck     @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  key         String   // e.g. "reading", "example", "definition"
+  label       String
+  description String   @default("")
+  fieldType   String   @default("text") // "text" | "example"
+  showOnFront Boolean  @default(false)
+  phonetics   String   @default("{\"ruby\":\"none\",\"extras\":[]}") // JSON: { ruby, extras[] }
+  position    Int      @default(0)
+
+  @@index([deckId])
+}
+
+model Card {
+  id            String    @id @default(cuid())
+  deckId        String
+  deck          Deck      @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  word          String
+  fields        String    @default("{}") // JSON: { [key]: string | {text,annotations} | [{text,annotations}] }
+  tags          String    @default("[]") // JSON array of tag strings
+  // FSRS-5 SRS state
+  srsState      String    @default("new") // "new" | "learning" | "review" | "relearning"
+  stability     Float     @default(0)
+  difficulty    Float     @default(5)
+  repetitions   Int       @default(0)
+  interval      Int       @default(0) // days
+  seen          Boolean   @default(false)
+  learningStep  Int       @default(0) // index into [1,10] minute steps
+  suspended     Boolean  @default(false) // skip this card in study sessions
+  lastReviewedAt DateTime?
+  dueAt         DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  reviewLogs    ReviewLog[]
+
+  @@index([deckId])
+  @@index([dueAt])
+  @@index([srsState])
+  @@index([suspended])
+}
+
+model ReviewLog {
+  id          String   @id @default(cuid())
+  cardId      String
+  card        Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating      Int      // 1=Again, 2=Hard, 3=Good, 4=Easy
+  state       String   // srs state at time of review
+  elapsedDays Float    @default(0)
+  scheduledDays Float  @default(0)
+  reviewedAt  DateTime @default(now())
+  timeSpentMs Int      @default(0)
+
+  @@index([cardId])
+  @@index([userId])
+  @@index([reviewedAt])
+}
+
+model UserSetting {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String
+  value     String   // JSON-encoded value
+
+  @@unique([userId, key])
+}
