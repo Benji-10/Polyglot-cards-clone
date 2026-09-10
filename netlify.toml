@@ -3,33 +3,24 @@
 
 [build]
   command = "bash scripts/build-netlify.sh"
-  publish = ".next/standalone"
+  publish = ".next"
 
 [build.environment]
-  # Bun is installed via Netlify's plugin system or the version below.
   NODE_VERSION = "20"
-  # Next.js standalone output — served via the Netlify Next runtime.
-  NEXT_USE_NETLIFY = "true"
   # Set these in the Netlify dashboard (Site settings → Environment variables):
   #   DATABASE_URL                      — Neon PostgreSQL connection string
   #   NEXT_PUBLIC_NETLIFY_IDENTITY_URL  — https://<your-site>.netlify.app
-  #   NEXTAUTH_SECRET                    — any random string (optional, for sessions)
 
-# The @netlify/plugin-nextjs plugin is auto-detected; this makes API routes
-# (app/api/**) deploy as serverless functions automatically.
+# The @netlify/plugin-nextjs plugin converts the Next.js build into Netlify
+# serverless functions automatically. It requires the standard `.next`
+# build output (NOT `output: "standalone"` in next.config.ts).
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Next.js requires the standalone server to run.
+# Include Prisma schema files in the serverless functions so they're available
+# at runtime.
 [functions]
   included_files = ["prisma/**"]
-
-# SPA-style fallback so client routing always resolves.
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  conditions = {Path = ["!/api/*", "!/_next/*", "!/static/*"]}
 
 # Identity must be enabled in the Netlify dashboard:
 # Site → Integrations → Identity → Enable.

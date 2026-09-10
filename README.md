@@ -72,7 +72,9 @@ and Spanish sample decks with phonetic annotations.
    - Detects the PostgreSQL `DATABASE_URL` and switches the Prisma provider
      from `sqlite` to `postgresql`.
    - Runs `prisma generate` + `prisma db push` (creates tables on Neon).
-   - Builds Next.js with the standalone output.
+   - Builds Next.js using `npx next build` (standard output, not standalone).
+   - The `@netlify/plugin-nextjs` plugin then converts the `.next` output
+     into Netlify serverless functions automatically.
 4. In **Site settings → Environment variables**, add:
    - `DATABASE_URL` → your Neon connection string
    - `NEXT_PUBLIC_NETLIFY_IDENTITY_URL` → `https://<your-site>.netlify.app`
