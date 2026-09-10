@@ -5,6 +5,9 @@
 # PostgreSQL. This script swaps the Prisma datasource provider to
 # "postgresql" when a Neon/Postgres DATABASE_URL is present, then runs
 # prisma generate + next build.
+#
+# IMPORTANT: This script uses npx (not bun) because bun is NOT available
+# in the Netlify build image.
 set -euo pipefail
 
 echo "▶ Polyglot Cards build"
@@ -21,16 +24,18 @@ else
 fi
 
 echo "▶ Running prisma generate"
-bunx prisma generate
+npx prisma generate
 
 # Push the schema to the Neon database on every deploy (safe — it only adds
 # missing tables/columns and never drops data with db push --accept-data-loss).
 if [[ "$DB_URL" == postgres* ]] || [[ "$DB_URL" == postgresql* ]]; then
   echo "▶ Pushing schema to Neon"
-  bunx prisma db push --accept-data-loss || echo "⚠ db push skipped (may already be in sync)"
+  npx prisma db push --accept-data-loss || echo "⚠ db push skipped (may already be in sync)"
 fi
 
 echo "▶ Building Next.js"
-bun run build
+# Use npx next build directly (NOT bun run build, which copies standalone files).
+# The @netlify/plugin-nextjs plugin handles the serverless conversion.
+npx next build
 
 echo "✔ Build complete"

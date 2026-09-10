@@ -684,3 +684,29 @@ Stage Summary:
 - Improved stat card styling with gradient backgrounds and radial glow effects.
 - VLM dashboard rating improved: 8.5/10 → 9/10.
 - Next priorities: full session resume (restore queue + index), mobile drawer improvements, more AI features.
+
+---
+Task ID: 19 (Netlify build fix — critical deployment bug)
+Agent: main
+Task: Fix Netlify build failure: "Your publish directory does not contain expected Next.js build output."
+
+Root cause:
+- next.config.ts had `output: "standalone"` which produces a self-contained Node server, NOT the standard `.next` output that @netlify/plugin-nextjs expects.
+- The build script used `bun run build` and `bunx prisma generate` — bun is NOT installed in the Netlify build image.
+- The package.json build script copied standalone files (`cp -r .next/static .next/standalone/.next/`) which are not needed.
+- netlify.toml had `publish = ".next/standalone"` instead of `publish = ".next"`.
+- netlify.toml had a SPA redirect rule that interferes with Next.js routing.
+
+Fixes:
+1. next.config.ts: removed `output: "standalone"` — the @netlify/plugin-nextjs plugin handles serverless conversion from standard `.next` output.
+2. scripts/build-netlify.sh: replaced `bunx` → `npx`, replaced `bun run build` → `npx next build` (bun is not available on Netlify).
+3. package.json: simplified build script to just `next build` (removed standalone copy commands). Changed start to `next start`.
+4. netlify.toml: changed `publish` from `.next/standalone` to `.next`. Removed the SPA redirect rule (interferes with Next.js routing). Simplified config.
+5. .env.example: cleaned up.
+6. README.md: updated to reflect the correct build process.
+7. Cleaned up old .next/standalone directory.
+
+Verification:
+- Local `npx next build` succeeds ✓ — all 20 API routes compiled as serverless functions.
+- `.next/` directory contains proper build output (BUILD_ID, build-manifest, server/app/api routes).
+- Lint: 0 errors, 1 non-blocking warning.
