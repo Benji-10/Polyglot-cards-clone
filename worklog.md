@@ -742,3 +742,32 @@ Fixes:
 Verification:
 - Lint: 0 errors, 1 non-blocking warning.
 - The GoTrue URL fix means signup/login/recover now hit the correct Netlify Identity endpoints.
+
+---
+Task ID: 21 (Replace manual GoTrue calls with netlify-identity-widget)
+Agent: main
+Task: Fix 404 on login/signup — replace fragile manual GoTrue API calls with the official netlify-identity-widget.
+
+Root cause:
+- The previous fix (appending /.netlify/identity to the URL) was correct but the deployed code was still using the old path.
+- Manual GoTrue API calls are fragile — they depend on correct URL construction and don't handle edge cases (CSRF, token refresh, etc).
+
+Fix:
+- Replaced ALL manual GoTrue API calls (netlifySignup, netlifyLogin, netlifyRecover) with the official netlify-identity-widget.
+- The widget handles ALL URL construction, token management, and UI automatically.
+
+Changes:
+1. layout.tsx: Always load the widget script (not just on netlify hosts). The widget auto-detects whether Identity is enabled and only shows UI if it is.
+
+2. use-auth.tsx: Complete rewrite:
+   - signIn() and signUp() now call window.netlifyIdentity.open("login"/"signup") which opens the widget's modal UI.
+   - The widget handles the entire auth flow (email/password entry, signup, login, email confirmation, etc).
+   - Listens for "login" and "logout" events from the widget to update app state.
+   - Stores the JWT token from the widget for API requests.
+   - Falls back to local guest mode if the widget isn't available.
+
+3. auth.ts isNetlifyIdentityConfigured(): Now auto-detects Netlify by checking hostname (contains "netlify") OR env var. No env var required — the widget works automatically on Netlify sites.
+
+4. auth-landing.tsx: Simplified — removed the custom AuthDialog (the widget provides its own modal). Sign In / Get Started / Continue as Guest buttons now call the widget directly.
+
+Key benefit: The user no longer needs to set NEXT_PUBLIC_NETLIFY_IDENTITY_URL — the widget auto-detects the site URL. They just need to enable Identity in the Netlify dashboard (Site → Integrations → Identity → Enable).

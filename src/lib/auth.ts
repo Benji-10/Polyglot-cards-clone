@@ -21,15 +21,26 @@ const LOCAL_GUEST_KEY = "polyglot_guest_user";
 const AUTH_USER_KEY = "polyglot_auth_user";
 
 export function isNetlifyIdentityConfigured(): boolean {
-  return !!process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL;
+  // Check env var first, then fall back to hostname detection.
+  if (process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL) return true;
+  if (typeof window !== "undefined") {
+    return (
+      window.location.hostname.includes("netlify") ||
+      !!window.netlifyIdentity
+    );
+  }
+  return false;
 }
 
 export function getIdentityUrl(): string {
-  // Netlify Identity's GoTrue API lives at /.netlify/identity/*
-  // NEXT_PUBLIC_NETLIFY_IDENTITY_URL should be the site URL (e.g.
-  // https://your-site.netlify.app). We append the GoTrue path here.
+  // The widget auto-detects the site URL, so we don't need this for auth.
+  // Kept for backward compatibility with server-side code.
   const base = (process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL || "").replace(/\/$/, "");
-  return `${base}/.netlify/identity`;
+  if (base) return `${base}/.netlify/identity`;
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/.netlify/identity`;
+  }
+  return "";
 }
 
 // ---- Client-side auth helpers ----

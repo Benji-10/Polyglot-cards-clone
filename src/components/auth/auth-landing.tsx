@@ -1,23 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Brain, Sparkles, Layers, Repeat, Loader2 } from "lucide-react";
+import { Brain, Sparkles, Layers, Repeat } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { useToast } from "@/hooks/use-toast";
 
 export function AuthLanding() {
-  const { isNetlify, continueAsGuest } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup" | "recover" | null>(null);
+  const { isNetlify, signIn, signUp, continueAsGuest } = useAuth();
 
   return (
     <div className="min-h-screen landing-bg flex flex-col">
@@ -60,15 +49,15 @@ export function AuthLanding() {
               <div className="space-y-3">
                 <Button
                   className="btn-primary w-full h-11"
-                  onClick={() => setMode("signin")}
+                  onClick={() => signUp()}
                 >
-                  Sign In
+                  Get Started
                 </Button>
                 <Button
                   className="btn-secondary w-full h-11"
-                  onClick={() => setMode("signup")}
+                  onClick={() => signIn()}
                 >
-                  Create Account
+                  Sign In
                 </Button>
                 <div className="relative py-2">
                   <div className="absolute inset-0 flex items-center">
@@ -91,13 +80,13 @@ export function AuthLanding() {
               <div className="space-y-3">
                 <Button
                   className="btn-primary w-full h-11"
-                  onClick={() => setMode("signup")}
+                  onClick={continueAsGuest}
                 >
                   Get Started
                 </Button>
                 <Button
                   className="btn-secondary w-full h-11"
-                  onClick={() => setMode("signin")}
+                  onClick={continueAsGuest}
                 >
                   Sign In
                 </Button>
@@ -130,148 +119,6 @@ export function AuthLanding() {
       <footer className="text-center py-4 text-xs text-muted">
         Built for language learners · FSRS-5 spaced repetition
       </footer>
-
-      {mode && (
-        <AuthDialog mode={mode} onModeChange={setMode} onClose={() => setMode(null)} />
-      )}
     </div>
-  );
-}
-
-function AuthDialog({
-  mode,
-  onModeChange,
-  onClose,
-}: {
-  mode: "signin" | "signup" | "recover";
-  onModeChange: (m: "signin" | "signup" | "recover") => void;
-  onClose: () => void;
-}) {
-  const { signIn, signUp, recover, isNetlify } = useAuth();
-  const { toast } = useToast();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      if (mode === "signin") {
-        await signIn(email, password);
-        toast({ title: "Welcome back!" });
-      } else if (mode === "signup") {
-        await signUp(name || email.split("@")[0], email, password);
-        toast({
-          title: isNetlify
-            ? "Check your email to confirm your account"
-            : "Account created!",
-        });
-        if (!isNetlify) onClose();
-      } else {
-        await recover(email);
-        toast({ title: "Recovery email sent" });
-        onModeChange("signin");
-      }
-    } catch (e) {
-      toast({
-        title:
-          mode === "signin"
-            ? "Sign in failed"
-            : mode === "signup"
-            ? "Sign up failed"
-            : "Recovery failed",
-        description: (e as Error).message,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const titles = {
-    signin: "Sign In",
-    signup: "Create Account",
-    recover: "Recover Password",
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="bg-surface border surface-border max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="font-display text-xl">
-            {titles[mode]}
-          </DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-3">
-          {mode === "signup" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="name">Name</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Your name"
-                className="bg-elevated border surface-border"
-              />
-            </div>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="bg-elevated border surface-border"
-            />
-          </div>
-          {mode !== "recover" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="bg-elevated border surface-border"
-              />
-            </div>
-          )}
-          {mode === "signin" && (
-            <button
-              type="button"
-              onClick={() => onModeChange("recover")}
-              className="text-xs text-[var(--accent-primary)] hover:underline"
-            >
-              Forgot password?
-            </button>
-          )}
-          <DialogFooter className="pt-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onClose}
-              className="btn-ghost"
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading} className="btn-primary">
-              {loading && <Loader2 className="size-4 mr-1 animate-spin" />}
-              {mode === "signin"
-                ? "Sign In"
-                : mode === "signup"
-                ? "Create Account"
-                : "Send Email"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

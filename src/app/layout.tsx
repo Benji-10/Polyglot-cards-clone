@@ -55,20 +55,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Netlify Identity widget — loaded unconditionally; only active when
-            NEXT_PUBLIC_NETLIFY_IDENTITY_URL is configured (handled in auth). */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if (window.location.hostname && window.location.hostname.indexOf('netlify') !== -1) {
-                var s = document.createElement('script');
-                s.src = 'https://identity.netlify.com/v1/netlify-identity-widget.js';
-                s.async = true;
-                document.head.appendChild(s);
-              }
-            `,
-          }}
-        />
+        {/* Always load the Netlify Identity widget. It auto-detects the site
+            URL and handles all GoTrue API calls (signup/login/logout/recover)
+            automatically. Only active when Netlify Identity is enabled on the
+            site. */}
+        <script src="https://identity.netlify.com/v1/netlify-identity-widget.js" async />
       </head>
       <body
         className={`${dmSans.variable} ${playfair.variable} ${jetbrainsMono.variable} antialiased`}
