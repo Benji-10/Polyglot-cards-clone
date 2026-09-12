@@ -710,3 +710,35 @@ Verification:
 - Local `npx next build` succeeds ✓ — all 20 API routes compiled as serverless functions.
 - `.next/` directory contains proper build output (BUILD_ID, build-manifest, server/app/api routes).
 - Lint: 0 errors, 1 non-blocking warning.
+
+---
+Task ID: 20 (Fix Netlify Identity login/signup 400 error)
+Agent: main
+Task: Fix 400 errors when trying to log in or sign up on the deployed Netlify site.
+
+Root cause:
+- The GoTrue API URL was wrong. The code called `${NEXT_PUBLIC_NETLIFY_IDENTITY_URL}/signup` but Netlify Identity's GoTrue API lives at `/.netlify/identity/signup`.
+- So if NEXT_PUBLIC_NETLIFY_IDENTITY_URL was set to `https://yoursite.netlify.app`, the code was calling `https://yoursite.netlify.app/signup` (which 404s) instead of `https://yoursite.netlify.app/.netlify/identity/signup`.
+
+Fixes:
+1. auth.ts getIdentityUrl(): now appends `/.netlify/identity` to the base URL. So the GoTrue endpoints are:
+   - Signup: `${base}/.netlify/identity/signup`
+   - Login: `${base}/.netlify/identity/token`
+   - Recover: `${base}/.netlify/identity/recover`
+   - Current user: `${base}/.netlify/identity/user`
+
+2. use-auth.tsx signIn(): now stores the JWT access_token in localStorage as `polyglot_auth_token` after login, so it can be sent with API requests.
+
+3. use-auth.tsx signOut(): now clears the `polyglot_auth_token` from localStorage.
+
+4. use-auth.tsx mount effect: now checks for the Netlify Identity widget's stored user (`netlify-identity-user` + `netlify-identity-token` in localStorage) so users who logged in via the widget are automatically recognized.
+
+5. api-client.ts getAuthHeaders(): now attaches the JWT as an `Authorization: Bearer <token>` header so the server can verify the user.
+
+6. auth-landing.tsx: added a "Continue as Guest" button when Netlify Identity is configured (as a fallback if Identity isn't fully set up).
+
+7. .env.example: clarified that NEXT_PUBLIC_NETLIFY_IDENTITY_URL should be the site URL (the app appends /.netlify/identity automatically).
+
+Verification:
+- Lint: 0 errors, 1 non-blocking warning.
+- The GoTrue URL fix means signup/login/recover now hit the correct Netlify Identity endpoints.

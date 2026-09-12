@@ -49,6 +49,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     (async () => {
+      // First check if the Netlify Identity widget has a logged-in user.
+      if (isNetlify && typeof window !== "undefined") {
+        // The widget stores the user + token in localStorage.
+        try {
+          const widgetUser = localStorage.getItem("netlify-identity-user");
+          const widgetToken = localStorage.getItem("netlify-identity-token");
+          if (widgetUser && widgetToken) {
+            const parsed = JSON.parse(widgetUser);
+            const tokenParsed = JSON.parse(widgetToken);
+            const u: AuthUser = {
+              id: parsed.id,
+              email: parsed.email,
+              name: parsed.user_metadata?.full_name || null,
+              netlifyId: parsed.id,
+            };
+            storeAuthUser(u);
+            localStorage.setItem("polyglot_auth_token", tokenParsed.access_token || tokenParsed);
+            if (active) {
+              setUser(u);
+              setLoading(false);
+            }
+            api.get("/api/auth/me").catch(() => {});
+            return;
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+      }
+
       const existing = getStoredAuthUser();
       if (existing) {
         if (active) {
@@ -87,6 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         netlifyId: token.user.id,
       };
       storeAuthUser(u);
+      // Store the JWT so API requests can be authenticated server-side.
+      if (typeof window !== "undefined") {
+        localStorage.setItem("polyglot_auth_token", token.access_token);
+      }
       setUser(u);
       await api.get("/api/auth/me");
     } else {
@@ -132,6 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     storeAuthUser(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("polyglot_auth_token");
+    }
     if (isNetlify) {
       // Best-effort logout via the global Netlify Identity widget (loaded in layout).
       const w = typeof window !== "undefined" ? (window as unknown as { netlifyIdentity?: { logout?: () => void } }).netlifyIdentity : undefined;

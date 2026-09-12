@@ -70,6 +70,22 @@ export function AuthLanding() {
                 >
                   Create Account
                 </Button>
+                <div className="relative py-2">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t subtle-border" />
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="px-2 text-xs text-muted bg-[var(--bg-elevated)] rounded">
+                      or
+                    </span>
+                  </div>
+                </div>
+                <Button
+                  className="btn-ghost w-full h-11 border surface-border"
+                  onClick={continueAsGuest}
+                >
+                  Continue as Guest
+                </Button>
               </div>
             ) : (
               <div className="space-y-3">

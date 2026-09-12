@@ -14,11 +14,19 @@ export class ApiError extends Error {
 function getAuthHeaders(): Record<string, string> {
   let user: AuthUser | null = getStoredAuthUser();
   if (!user) user = getOrCreateLocalGuest();
-  return {
+  const headers: Record<string, string> = {
     "x-user-id": user.id,
     "x-user-email": user.email,
     "x-user-name": user.name || "",
   };
+  // Attach the Netlify Identity JWT if we have one (for production auth).
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("polyglot_auth_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+  return headers;
 }
 
 export async function apiFetch<T>(

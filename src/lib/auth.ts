@@ -25,7 +25,11 @@ export function isNetlifyIdentityConfigured(): boolean {
 }
 
 export function getIdentityUrl(): string {
-  return (process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL || "").replace(/\/$/, "");
+  // Netlify Identity's GoTrue API lives at /.netlify/identity/*
+  // NEXT_PUBLIC_NETLIFY_IDENTITY_URL should be the site URL (e.g.
+  // https://your-site.netlify.app). We append the GoTrue path here.
+  const base = (process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL || "").replace(/\/$/, "");
+  return `${base}/.netlify/identity`;
 }
 
 // ---- Client-side auth helpers ----
