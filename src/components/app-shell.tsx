@@ -1,23 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   LayoutDashboard,
   Layers,
   BarChart3,
   Settings as SettingsIcon,
-  Brain,
-  Sparkles,
-  LogOut,
+  Plus,
   Menu,
   X,
-  Plus,
+  LogOut,
 } from "lucide-react";
 import { useUi, type View } from "@/store/ui-store";
 import { useAuth } from "@/hooks/use-auth";
 import { useDecks } from "@/hooks/use-data";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -48,17 +45,53 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth();
   const { data: decks } = useDecks();
   const [createOpen, setCreateOpen] = useState(false);
+  const signOutBtnRef = useRef<HTMLButtonElement>(null);
 
-  const handleSignOut = () => {
-    console.log("[AppShell] signOut button clicked");
-    console.log("[AppShell] user before signOut:", user);
-    try {
-      signOut();
-      console.log("[AppShell] signOut() returned successfully");
-    } catch (e) {
-      console.error("[AppShell] signOut threw an error:", e);
-    }
-  };
+  // Attach a native event listener as a fallback — this bypasses React's
+  // synthetic event system entirely, in case there's a hydration issue
+  // preventing the React onClick from firing.
+  useEffect(() => {
+    const btn = signOutBtnRef.current;
+    if (!btn) return;
+
+    const nativeClick = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log("[AppShell] native click detected on sign-out button");
+
+      // Show a visible toast so we know the click registered.
+      showToast("Signing out...");
+
+      // Perform the sign-out directly — bypass the React auth hook's
+      // potentially stale closure.
+      try {
+        // Clear all auth-related localStorage.
+        localStorage.removeItem("polyglot_auth_user");
+        localStorage.removeItem("polyglot_auth_token");
+        localStorage.removeItem("polyglot_guest_user");
+        localStorage.removeItem("netlify-identity-user");
+        localStorage.removeItem("netlify-identity-token");
+        console.log("[AppShell] cleared all localStorage keys");
+
+        // Call the widget logout if available.
+        if (typeof window !== "undefined" && window.netlifyIdentity) {
+          console.log("[AppShell] calling netlifyIdentity.logout()");
+          window.netlifyIdentity.logout();
+        }
+
+        // Call the React signOut (which will setUser(null)).
+        signOut();
+        console.log("[AppShell] signOut() called");
+      } catch (err) {
+        console.error("[AppShell] sign-out error:", err);
+        // Nuclear fallback: just reload the page.
+        window.location.href = window.location.origin;
+      }
+    };
+
+    btn.addEventListener("click", nativeClick);
+    return () => btn.removeEventListener("click", nativeClick);
+  }, [signOut]);
 
   return (
     <div className="h-screen flex overflow-hidden bg-app text-[var(--text-primary)]">
@@ -198,11 +231,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </ScrollArea>
 
-        {/* User footer */}
+        {/* User footer — sign out button.
+            Uses BOTH React onClick AND a native addEventListener fallback
+            in case React's synthetic events aren't working. */}
         <div className="border-t subtle-border p-3 shrink-0">
           <button
+            ref={signOutBtnRef}
             onClick={handleSignOut}
             className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-elevated transition-colors group"
+            data-testid="sign-out-button"
           >
             <div className="flex-1 text-left min-w-0">
               <div className="text-sm font-medium truncate">
@@ -236,6 +273,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <CommandPalette />
     </div>
   );
+}
+
+function handleSignOut() {
+  // This is the React onClick handler. The native addEventListener
+  // in the useEffect above is the fallback.
+  console.log("[AppShell] React onClick: signOut button clicked");
+}
+
+function showToast(message: string) {
+  // Create a visible toast notification that doesn't depend on React state.
+  const toast = document.createElement("div");
+  toast.textContent = message;
+  toast.style.cssText = `
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent-primary);
+    color: white;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    animation: fadeIn 0.2s ease;
+  `;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transition = "opacity 0.3s ease";
+    setTimeout(() => toast.remove(), 300);
+  }, 2000);
 }
 
 function flagFor(lang: string): string {

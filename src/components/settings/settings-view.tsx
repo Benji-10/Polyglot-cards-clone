@@ -63,7 +63,30 @@ export function SettingsView() {
               {isNetlify ? "Netlify Identity account" : "Local guest account"}
             </div>
           </div>
-          <Button variant="ghost" className="btn-danger h-9 gap-2 shrink-0" onClick={signOut}>
+          <Button
+            variant="ghost"
+            className="btn-danger h-9 gap-2 shrink-0"
+            onClick={() => {
+              console.log("[Settings] sign out button clicked");
+              // Nuclear option: clear everything and reload.
+              try {
+                localStorage.removeItem("polyglot_auth_user");
+                localStorage.removeItem("polyglot_auth_token");
+                localStorage.removeItem("polyglot_guest_user");
+                localStorage.removeItem("netlify-identity-user");
+                localStorage.removeItem("netlify-identity-token");
+                if (window.netlifyIdentity) {
+                  window.netlifyIdentity.logout();
+                }
+                // Force a full page reload to reset all React state.
+                window.location.href = window.location.origin;
+              } catch (e) {
+                console.error("[Settings] sign out failed:", e);
+                // Ultimate fallback.
+                window.location.reload();
+              }
+            }}
+          >
             <LogOut className="size-4" /> Sign out
           </Button>
         </div>
