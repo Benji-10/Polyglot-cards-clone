@@ -771,3 +771,31 @@ Changes:
 4. auth-landing.tsx: Simplified — removed the custom AuthDialog (the widget provides its own modal). Sign In / Get Started / Continue as Guest buttons now call the widget directly.
 
 Key benefit: The user no longer needs to set NEXT_PUBLIC_NETLIFY_IDENTITY_URL — the widget auto-detects the site URL. They just need to enable Identity in the Netlify dashboard (Site → Integrations → Identity → Enable).
+
+---
+Task ID: 22 (Auth fix + cursor pointer + remove badges + favicon + frictionless quick-add)
+Agent: main
+Task: Fix guest mode auto-login, add cursor:pointer, remove avatar badges, add favicon, improve quick-add.
+
+Fixes:
+1. Auth: On Netlify sites, no longer auto-uses stored guest from localStorage. Only auto-logins if the stored user has a netlifyId (real Netlify user). Shows landing page for guest/none users.
+
+2. SignOut: Now clears localStorage guest user + token. On Netlify, sets user to null → shows landing page. On local dev, creates a fresh guest.
+
+3. Cursor pointer: Added global CSS rule for button, [role=button], a, label[for], select, summary, .cursor-pointer, [onclick] → cursor: pointer. Disabled buttons → cursor: not-allowed.
+
+4. Removed avatar/badge: Removed Avatar + AvatarFallback from sidebar footer. Now shows just the user name + email + logout icon.
+
+5. Favicon: Created /public/favicon.svg — purple rounded square with white 多 character.
+
+6. Frictionless quick-add: Complete rewrite of QuickAddCard:
+   - Uses native <input> elements (not shadcn Input) for faster focus.
+   - After adding a card, shows "Added 'word' — type the next word ↓" confirmation.
+   - Clears all fields and refocuses the word input instantly.
+   - Enter in any of the 3 main fields (word/translation/context) adds instantly.
+   - All inputs have focus:border-accent-primary for visual feedback.
+   - Hint text at bottom: "Press Enter to add instantly, then type the next word."
+
+Verification:
+- Lint: 0 errors, 1 warning.
+- VLM confirmed landing page auth card with 3 buttons, all look clickable.

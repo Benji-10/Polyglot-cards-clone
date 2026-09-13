@@ -157,12 +157,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           widget.on("login", onLogin);
           widget.on("logout", onLogout);
 
+          // On Netlify, DON'T fall through to stored guest — show the landing
+          // page so the user can sign in or continue as guest.
           if (active) setLoading(false);
           return;
         }
       }
 
-      // Fall back to stored auth user or local guest.
+      // On Netlify sites (widget not loaded yet or not available),
+      // check for a REAL auth user (not a guest) in localStorage.
+      if (isNetlify) {
+        const existing = getStoredAuthUser();
+        // Only auto-login if the stored user is a real Netlify user (has netlifyId).
+        // Don't auto-use guests — let the user choose on the landing page.
+        if (existing && existing.netlifyId) {
+          if (active) {
+            setUser(existing);
+            setLoading(false);
+          }
+          api.get("/api/auth/me").catch(() => {});
+          return;
+        }
+        // No real user — show the landing page.
+        if (active) setLoading(false);
+        return;
+      }
+
+      // Local dev: fall back to stored auth user or auto-create a guest.
       const existing = getStoredAuthUser();
       if (existing) {
         if (active) {
@@ -173,17 +194,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (!isNetlify) {
-        const guest = getOrCreateLocalGuest();
-        storeAuthUser(guest);
-        if (active) {
-          setUser(guest);
-          setLoading(false);
-        }
-        api.get("/api/auth/me").catch(() => {});
-      } else {
-        if (active) setLoading(false);
+      // No stored session → create a local guest automatically (local dev only).
+      const guest = getOrCreateLocalGuest();
+      storeAuthUser(guest);
+      if (active) {
+        setUser(guest);
+        setLoading(false);
       }
+      api.get("/api/auth/me").catch(() => {});
     };
 
     init();
@@ -217,15 +235,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     storeAuthUser(null);
     if (typeof window !== "undefined") {
       localStorage.removeItem("polyglot_auth_token");
+      // Also clear the local guest so it doesn't auto-login on next visit.
+      localStorage.removeItem("polyglot_guest_user");
     }
-    if (isNetlify && typeof window !== "undefined" && window.netlifyIdentity) {
+    if (typeof window !== "undefined" && window.netlifyIdentity) {
       window.netlifyIdentity.logout();
     }
     if (!isNetlify) {
+      // Local dev: immediately create a new guest so the app is usable.
       const guest = getOrCreateLocalGuest();
       storeAuthUser(guest);
       setUser(guest);
     } else {
+      // Netlify: show the landing page so the user can sign in again.
       setUser(null);
     }
   }, [isNetlify]);

@@ -1,20 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useCreateCard } from "@/hooks/use-data";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Plus, Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, Check, ChevronDown, ChevronUp } from "lucide-react";
 import type { BlueprintFieldDef, CardFields } from "@/lib/types";
 import { getAnnotationKeys, isCJK } from "@/lib/ruby";
 import { cn } from "@/lib/utils";
 
-// Frictionless quick-add card form — always visible at the top of the
-// collection. Type the word, hit Enter, the card is added instantly and the
-// form clears. Optionally expand to fill in blueprint fields.
+// Frictionless quick-add card form. Type a word, press Tab to translation,
+// press Enter to add instantly. The cursor jumps back to the word field
+// so you can add the next card without clicking anything.
 export function QuickAddCard({
   deckId,
   fields,
@@ -30,6 +29,8 @@ export function QuickAddCard({
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [saved, setSaved] = useState(false);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+  const wordRef = useRef<HTMLInputElement>(null);
 
   const setField = (k: string, v: string) =>
     setFieldValues((p) => ({ ...p, [k]: v }));
@@ -83,16 +84,17 @@ export function QuickAddCard({
         fields: buildFields(),
         tags,
       });
+      // Show what was added briefly.
+      setJustAdded(word.trim());
+      // Clear all fields for the next card.
       setWord("");
       setFieldValues({});
       setTags([]);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
-      if (!expanded) {
-        // Keep focus on the word input for rapid entry.
-        const el = document.getElementById("quickadd-word");
-        el?.focus();
-      }
+      setTimeout(() => setJustAdded(null), 2000);
+      // Refocus the word input for instant next-card entry.
+      setTimeout(() => wordRef.current?.focus(), 0);
     } catch (e) {
       toast({
         title: "Failed to add card",
@@ -110,11 +112,19 @@ export function QuickAddCard({
 
   return (
     <div className="pc-card-elevated rounded-xl p-4 mb-4">
+      {/* Just-added confirmation */}
+      {justAdded && (
+        <div className="mb-3 px-3 py-2 rounded-lg bg-[var(--accent-secondary)]/10 text-[var(--accent-secondary)] text-sm flex items-center gap-2 animate-fade-in">
+          <Check className="size-4" />
+          Added "{justAdded}" — type the next word ↓
+        </div>
+      )}
+
+      {/* Main row: word + translation + add button */}
       <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted">Word *</Label>
-          <Input
-            id="quickadd-word"
+        <div className="relative">
+          <input
+            ref={wordRef}
             value={word}
             onChange={(e) => setWord(e.target.value)}
             onKeyDown={(e) => {
@@ -123,31 +133,28 @@ export function QuickAddCard({
                 handleSave();
               }
             }}
-            placeholder="New word..."
+            placeholder="Word..."
             className={cn(
-              "bg-elevated border surface-border h-9",
+              "w-full bg-elevated border surface-border h-10 rounded-md px-3 text-sm outline-none focus:border-[var(--accent-primary)] transition-colors",
               isCJK(word) && "font-cjk"
             )}
             autoFocus
           />
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted">Translation</Label>
-          <Input
-            value={fieldValues.source_translation || ""}
-            onChange={(e) => setField("source_translation", e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !expanded) {
-                e.preventDefault();
-                handleSave();
-              }
-            }}
-            placeholder="English meaning..."
-            className="bg-elevated border surface-border h-9"
-          />
-        </div>
+        <input
+          value={fieldValues.source_translation || ""}
+          onChange={(e) => setField("source_translation", e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !expanded) {
+              e.preventDefault();
+              handleSave();
+            }
+          }}
+          placeholder="Translation..."
+          className="w-full bg-elevated border surface-border h-10 rounded-md px-3 text-sm outline-none focus:border-[var(--accent-primary)] transition-colors"
+        />
         <Button
-          className="btn-primary h-9 gap-2"
+          className="btn-primary h-10 gap-2 shrink-0"
           onClick={handleSave}
           disabled={createMut.isPending || !word.trim()}
         >
@@ -156,21 +163,24 @@ export function QuickAddCard({
           ) : saved ? (
             <Check className="size-4" />
           ) : (
-            <Plus className="size-4" />
+            <span className="text-xs font-medium">Add</span>
           )}
-          {saved ? "Added!" : "Add"}
         </Button>
       </div>
 
-      {/* Context row (always visible, frictionless) */}
-      <div className="mt-2">
-        <Input
-          value={fieldValues.context || ""}
-          onChange={(e) => setField("context", e.target.value)}
-          placeholder="Context — e.g. (masculine), (verb, informal)..."
-          className="bg-elevated border surface-border h-8 text-sm"
-        />
-      </div>
+      {/* Context row (always visible) */}
+      <input
+        value={fieldValues.context || ""}
+        onChange={(e) => setField("context", e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !expanded) {
+            e.preventDefault();
+            handleSave();
+          }
+        }}
+        placeholder="Context (optional) — e.g. (masculine), (verb)..."
+        className="w-full mt-2 bg-elevated border surface-border h-8 rounded-md px-3 text-sm outline-none focus:border-[var(--accent-primary)] transition-colors"
+      />
 
       {/* Expand for all blueprint fields */}
       {extraFields.length > 0 && (
@@ -196,7 +206,7 @@ export function QuickAddCard({
                       {field.label}
                       {field.fieldType === "example" && (
                         <span className="text-[0.65rem] text-muted font-normal">
-                          <code className="font-mono">{"{{word}}"}</code> for cloze
+                          use <code className="font-mono">{"{{word}}"}</code> for cloze
                         </span>
                       )}
                     </Label>
@@ -211,12 +221,12 @@ export function QuickAddCard({
                         )}
                       />
                     ) : (
-                      <Input
+                      <input
                         value={fieldValues[field.key] || ""}
                         onChange={(e) => setField(field.key, e.target.value)}
                         placeholder={field.description || field.label}
                         className={cn(
-                          "bg-elevated border surface-border h-8 text-sm",
+                          "w-full bg-elevated border surface-border h-8 rounded-md px-3 text-sm outline-none focus:border-[var(--accent-primary)] transition-colors",
                           isCJK(fieldValues[field.key] || "") && "font-cjk"
                         )}
                       />
@@ -224,7 +234,7 @@ export function QuickAddCard({
                     {annKeys.length > 0 && (
                       <div className="pl-2 border-l-2 border-[var(--accent-primary)]/30 space-y-1">
                         {annKeys.map((ak) => (
-                          <Input
+                          <input
                             key={ak}
                             value={fieldValues[`${field.key}__${ak}`] || ""}
                             onChange={(e) =>
@@ -232,7 +242,7 @@ export function QuickAddCard({
                             }
                             placeholder={ak}
                             className={cn(
-                              "bg-elevated border surface-border h-7 text-xs",
+                              "w-full bg-elevated border surface-border h-7 text-xs rounded-md px-2 outline-none focus:border-[var(--accent-primary)] transition-colors",
                               ak === "ipa" && "font-mono"
                             )}
                           />
@@ -242,7 +252,7 @@ export function QuickAddCard({
                   </div>
                 );
               })}
-              {/* Tags input in expanded mode */}
+              {/* Tags input */}
               <div className="space-y-1 sm:col-span-2">
                 <Label className="text-xs">Tags</Label>
                 <div className="flex flex-wrap gap-1 mb-1.5">
@@ -257,7 +267,7 @@ export function QuickAddCard({
                     </span>
                   ))}
                 </div>
-                <Input
+                <input
                   value={tagInput}
                   onChange={(e) => setTagInput(e.target.value)}
                   onKeyDown={(e) => {
@@ -267,7 +277,7 @@ export function QuickAddCard({
                     }
                   }}
                   placeholder="Add tag, press Enter..."
-                  className="bg-elevated border surface-border h-7 text-xs"
+                  className="w-full bg-elevated border surface-border h-7 text-xs rounded-md px-2 outline-none focus:border-[var(--accent-primary)] transition-colors"
                 />
               </div>
             </div>
@@ -275,8 +285,11 @@ export function QuickAddCard({
         </>
       )}
       <p className="text-[0.7rem] text-muted mt-2">
-        Press <kbd className="font-mono text-[0.65rem] px-1 py-0.5 rounded bg-elevated">Enter</kbd>{" "}
-        in the word or translation field to add instantly.
+        Press{" "}
+        <kbd className="font-mono text-[0.65rem] px-1 py-0.5 rounded bg-elevated">
+          Enter
+        </kbd>{" "}
+        to add instantly, then type the next word.
       </p>
     </div>
   );

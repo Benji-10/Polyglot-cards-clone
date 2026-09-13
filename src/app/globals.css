@@ -96,6 +96,20 @@
   body {
     min-height: 100vh;
   }
+  /* Make all clickable elements show pointer cursor */
+  button,
+  [role="button"],
+  a,
+  label[for],
+  select,
+  summary,
+  .cursor-pointer,
+  [onclick] {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
 }
 
 /* ===== Utility component classes ===== */

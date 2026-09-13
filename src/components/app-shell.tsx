@@ -17,7 +17,6 @@ import { useUi, type View } from "@/store/ui-store";
 import { useAuth } from "@/hooks/use-auth";
 import { useDecks } from "@/hooks/use-data";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -49,10 +48,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth();
   const { data: decks } = useDecks();
   const [createOpen, setCreateOpen] = useState(false);
-
-  const initials = (user?.name || user?.email || "G")
-    .slice(0, 2)
-    .toUpperCase();
 
   return (
     <div className="h-screen flex overflow-hidden bg-app text-[var(--text-primary)]">
@@ -193,22 +188,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </ScrollArea>
 
         {/* User footer */}
-        <div className="border-t subtle-border p-3 shrink-0 overflow-hidden">
+        <div className="border-t subtle-border p-3 shrink-0">
           <button
             onClick={signOut}
-            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-elevated transition-colors group"
+            className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-elevated transition-colors group"
           >
-            <Avatar className="size-8 shrink-0">
-              <AvatarFallback className="bg-elevated text-[0.7rem] font-medium">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
             <div className="flex-1 text-left min-w-0">
               <div className="text-sm font-medium truncate">
-                {user?.name || "Guest"}
+                {user?.name || user?.email || "Guest"}
               </div>
               <div className="text-[0.7rem] text-muted truncate">
-                {user?.email}
+                {user?.email || "Guest mode"}
               </div>
             </div>
             <LogOut className="size-4 text-muted group-hover:text-[var(--accent-danger)] shrink-0" />
