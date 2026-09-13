@@ -88,8 +88,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let active = true;
 
     const init = async () => {
-      console.log("[auth] init running, isNetlify =", isNetlify);
-
       // First check if the Netlify Identity widget has a logged-in user.
       if (isNetlify && typeof window !== "undefined") {
         // Wait for the widget script to load (it's async in the layout).
@@ -108,7 +106,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
 
         const widget = await waitForWidget();
-        console.log("[auth] widget available:", !!widget);
         if (widget) {
           // Init the widget with the site URL.
           const siteUrl = process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL || "";
@@ -122,7 +119,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           // Check if user is already logged in.
           const widgetUser = widget.currentUser();
-          console.log("[auth] widget currentUser:", !!widgetUser);
           if (widgetUser) {
             const u: AuthUser = {
               id: widgetUser.id,
@@ -152,7 +148,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               token?: { access_token?: string };
             } | null;
             if (!widgetUser) return;
-            console.log("[auth] widget login event:", widgetUser.email);
             const authUser: AuthUser = {
               id: widgetUser.id,
               email: widgetUser.email,
@@ -172,7 +167,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
 
           const onLogout = () => {
-            console.log("[auth] widget logout event");
             storeAuthUser(null);
             localStorage.removeItem("polyglot_auth_token");
             if (active) {
@@ -186,7 +180,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // On Netlify, if there's a stored REAL user (not guest), use it.
           const stored = getStoredAuthUser();
           if (stored && stored.netlifyId) {
-            console.log("[auth] found stored real Netlify user:", stored.email);
             if (active) {
               setUser(stored);
               setLoading(false);
@@ -197,7 +190,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           // On Netlify, DON'T auto-use guests — show the landing page.
           // Clear any auto-created guest from the initial false detection.
-          console.log("[auth] Netlify: no real user, showing landing page");
           storeAuthUser(null);
           if (active) {
             setUser(null);
@@ -211,7 +203,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (isNetlify) {
         const existing = getStoredAuthUser();
         if (existing && existing.netlifyId) {
-          console.log("[auth] found stored real user (no widget yet):", existing.email);
           if (active) {
             setUser(existing);
             setLoading(false);
@@ -220,7 +211,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         // No real user — show the landing page. Clear any stale guest.
-        console.log("[auth] Netlify: no real user, showing landing");
         storeAuthUser(null);
         if (active) {
           setUser(null);
@@ -230,7 +220,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Local dev: fall back to stored auth user or auto-create a guest.
-      console.log("[auth] local dev mode");
       const existing = getStoredAuthUser();
       if (existing) {
         if (active) {
@@ -279,33 +268,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(() => {
-    console.log("[auth] signOut called, isNetlify =", isNetlify);
     storeAuthUser(null);
     if (typeof window !== "undefined") {
       localStorage.removeItem("polyglot_auth_token");
       localStorage.removeItem("polyglot_guest_user");
       localStorage.removeItem("netlify-identity-user");
       localStorage.removeItem("netlify-identity-token");
-      console.log("[auth] cleared localStorage");
     }
     if (typeof window !== "undefined" && window.netlifyIdentity) {
-      console.log("[auth] calling netlifyIdentity.logout()");
       try {
         window.netlifyIdentity.logout();
-      } catch (e) {
-        console.error("[auth] netlifyIdentity.logout() threw:", e);
+      } catch {
+        /* widget may not be ready — ignore */
       }
-    } else {
-      console.log("[auth] window.netlifyIdentity not available");
     }
     if (!isNetlify) {
       const guest = getOrCreateLocalGuest();
       storeAuthUser(guest);
       setUser(guest);
-      console.log("[auth] local dev: created new guest");
     } else {
       setUser(null);
-      console.log("[auth] Netlify: set user to null, should show landing");
     }
   }, [isNetlify]);
 

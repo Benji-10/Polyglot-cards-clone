@@ -1,0 +1,1456 @@
+     1→"use client";
+     2→
+     3→import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+     4→import {
+     5→  X,
+     6→  Eye,
+     7→  Keyboard,
+     8→  CheckSquare,
+     9→  Sparkles,
+    10→  Shuffle,
+    11→  Play,
+    12→  ArrowLeft,
+    13→  Check,
+    14→  Volume2,
+    15→  ArrowRight,
+    16→  ArrowLeftRight,
+    17→  HelpCircle,
+    18→  Edit,
+    19→  ChevronLeft,
+    20→  ChevronRight,
+    21→  Clock,
+    22→} from "lucide-react";
+    23→import { useDeck, useStudyCards, useReviewCard, useDeckTags } from "@/hooks/use-data";
+    24→import { useUi } from "@/store/ui-store";
+    25→import { useAppSettings } from "@/components/providers";
+    26→import { useToast } from "@/hooks/use-toast";
+    27→import { Button } from "@/components/ui/button";
+    28→import { Input } from "@/components/ui/input";
+    29→import { Label } from "@/components/ui/label";
+    30→import { Switch } from "@/components/ui/switch";
+    31→import { Skeleton } from "@/components/ui/skeleton";
+    32→import { RubyText } from "@/components/ruby-text";
+    33→import {
+    34→  predictInterval,
+    35→  formatIntervalDays,
+    36→  type SrsStateData,
+    37→} from "@/lib/srs";
+    38→import {
+    39→  gradeAnswer,
+    40→  gradeToRating,
+    41→  containsCJK,
+    42→} from "@/lib/similarity";
+    43→import { parseCloze, pickRandomExample, fieldValueToAnnotated } from "@/lib/ruby";
+    44→import { speak, isTtsSupported } from "@/lib/tts";
+    45→import { getLanguageBcp47, getLanguageFlag } from "@/lib/constants";
+    46→import type {
+    47→  CardData,
+    48→  BlueprintFieldDef,
+    49→  Rating,
+    50→  SessionResult,
+    51→  CardFields,
+    52→} from "@/lib/types";
+    53→import { cn } from "@/lib/utils";
+    54→
+    55→type Phase = "setup" | "studying" | "complete";
+    56→type Direction = "targetToSource" | "sourceToTarget";
+    57→
+    58→export function StudyView({ deckId }: { deckId: string }) {
+    59→  const { data: deck, isLoading } = useDeck(deckId);
+    60→  const { data: tagsData } = useDeckTags(deckId);
+    61→  const { setView } = useUi();
+    62→  const { settings } = useAppSettings();
+    63→  const { toast } = useToast();
+    64→
+    65→  const [mode, setMode] = useState<"learn" | "freestyle">("learn");
+    66→  const [direction, setDirection] = useState<Direction>("targetToSource");
+    67→  const [interaction, setInteraction] = useState<
+    68→    "passive" | "typing" | "multiple" | "cloze"
+    69→  >("passive");
+    70→  const [batchSize, setBatchSize] = useState(settings.defaultBatchSize || 20);
+    71→  const [randomise, setRandomise] = useState(false);
+    72→  const [pool, setPool] = useState<"all" | "seen" | "unseen">("all");
+    73→  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+    74→  const [phase, setPhase] = useState<Phase>("setup");
+    75→
+    76→  // Check for a saved session — initialise state directly from localStorage.
+    77→  const sessionKey = `polyglot_session_${deckId}`;
+    78→  const [savedSession, setSavedSession] = useState(() => {
+    79→    if (typeof window === "undefined") return null;
+    80→    try {
+    81→      const raw = localStorage.getItem(sessionKey);
+    82→      if (raw) {
+    83→        const parsed = JSON.parse(raw);
+    84→        if (parsed.savedAt && Date.now() - parsed.savedAt < 24 * 60 * 60 * 1000) {
+    85→          return parsed;
+    86→        }
+    87→        localStorage.removeItem(sessionKey);
+    88→      }
+    89→    } catch {
+    90→      /* ignore */
+    91→    }
+    92→    return null;
+    93→  });
+    94→
+    95→  const { data: studyData, isLoading: cardsLoading } = useStudyCards(deckId, {
+    96→    mode,
+    97→    pool: mode === "freestyle" ? pool : undefined,
+    98→    randomise,
+    99→    limit: batchSize,
+   100→    tag: selectedTag,
+   101→  });
+   102→
+   103→  const [queue, setQueue] = useState<CardData[]>([]);
+   104→  const [index, setIndex] = useState(0);
+   105→  const [result, setResult] = useState<SessionResult | null>(null);
+   106→
+   107→  const startSession = () => {
+   108→    if (!studyData?.cards?.length) {
+   109→      toast({
+   110→        title: mode === "learn" ? "Nothing due" : "No cards in pool",
+   111→        description:
+   112→          mode === "learn"
+   113→            ? "You're all caught up! Try Freestyle to review ahead."
+   114→            : undefined,
+   115→      });
+   116→      return;
+   117→    }
+   118→    setQueue(studyData.cards);
+   119→    setIndex(0);
+   120→    setResult(null);
+   121→    setPhase("studying");
+   122→    // Clear any saved session when starting fresh.
+   123→    localStorage.removeItem(sessionKey);
+   124→    setSavedSession(null);
+   125→  };
+   126→
+   127→  const onComplete = (r: SessionResult) => {
+   128→    setResult(r);
+   129→    setPhase("complete");
+   130→    // Clear saved session on completion.
+   131→    localStorage.removeItem(sessionKey);
+   132→    setSavedSession(null);
+   133→  };
+   134→
+   135→  const clearSession = () => {
+   136→    localStorage.removeItem(sessionKey);
+   137→    setSavedSession(null);
+   138→    toast({ title: "Previous session cleared." });
+   139→  };
+   140→
+   141→  if (isLoading || !deck) {
+   142→    return (
+   143→      <div className="p-8 max-w-3xl mx-auto">
+   144→        <Skeleton className="h-10 w-48 shimmer mb-4" />
+   145→        <Skeleton className="h-64 rounded-2xl shimmer" />
+   146→      </div>
+   147→    );
+   148→  }
+   149→
+   150→  return (
+   151→    <div className="p-4 md:p-6 lg:p-8 max-w-3xl mx-auto">
+   152→      <button
+   153→        onClick={() => setView({ name: "deck", deckId })}
+   154→        className="flex items-center gap-1.5 text-sm text-secondary hover:text-[var(--text-primary)] mb-4 transition-colors"
+   155→      >
+   156→        <ArrowLeft className="size-4" /> Back to deck
+   157→      </button>
+   158→
+   159→      {phase === "setup" && (
+   160→        <StudySetup
+   161→          deckName={deck.name}
+   162→          targetLanguage={deck.targetLanguage}
+   163→          sourceLanguage={deck.sourceLanguage}
+   164→          fields={deck.fields}
+   165→          mode={mode}
+   166→          setMode={setMode}
+   167→          direction={direction}
+   168→          setDirection={setDirection}
+   169→          interaction={interaction}
+   170→          setInteraction={setInteraction}
+   171→          batchSize={batchSize}
+   172→          setBatchSize={setBatchSize}
+   173→          randomise={randomise}
+   174→          setRandomise={setRandomise}
+   175→          pool={pool}
+   176→          setPool={setPool}
+   177→          tags={tagsData?.tags || []}
+   178→          selectedTag={selectedTag}
+   179→          setSelectedTag={setSelectedTag}
+   180→          dueCount={deck.stats?.due || 0}
+   181→          totalCards={studyData?.total || 0}
+   182→          loading={cardsLoading}
+   183→          onStart={startSession}
+   184→          savedSession={savedSession}
+   185→          onClearSession={clearSession}
+   186→        />
+   187→      )}
+   188→
+   189→      {phase === "studying" && queue.length > 0 && (
+   190→        <StudySession
+   191→          deckId={deckId}
+   192→          cards={queue}
+   193→          index={index}
+   194→          setIndex={setIndex}
+   195→          interaction={interaction}
+   196→          direction={direction}
+   197→          fields={deck.fields}
+   198→          targetLanguage={deck.targetLanguage}
+   199→          sourceLanguage={deck.sourceLanguage}
+   200→          contextLanguage={deck.contextLanguage}
+   201→          strictAccents={deck.strictAccents}
+   202→          strictMode={deck.strictMode}
+   203→          latinTyping={deck.latinTyping ?? false}
+   204→          romanisationField={deck.romanisationField ?? ""}
+   205→          onComplete={onComplete}
+   206→          onExit={() => setPhase("setup")}
+   207→          ttsEnabled={settings.ttsEnabled}
+   208→          ttsRate={settings.ttsRate}
+   209→          mode={mode}
+   210→        />
+   211→      )}
+   212→
+   213→      {phase === "complete" && result && (
+   214→        <StudyComplete result={result} onBack={() => setPhase("setup")} />
+   215→      )}
+   216→    </div>
+   217→  );
+   218→}
+   219→
+   220→// ============== Setup ==============
+   221→
+   222→function StudySetup(props: {
+   223→  deckName: string;
+   224→  targetLanguage: string;
+   225→  sourceLanguage: string;
+   226→  fields: BlueprintFieldDef[];
+   227→  mode: "learn" | "freestyle";
+   228→  setMode: (m: "learn" | "freestyle") => void;
+   229→  direction: Direction;
+   230→  setDirection: (d: Direction) => void;
+   231→  interaction: "passive" | "typing" | "multiple" | "cloze";
+   232→  setInteraction: (i: "passive" | "typing" | "multiple" | "cloze") => void;
+   233→  batchSize: number;
+   234→  setBatchSize: (n: number) => void;
+   235→  randomise: boolean;
+   236→  setRandomise: (b: boolean) => void;
+   237→  pool: "all" | "seen" | "unseen";
+   238→  setPool: (p: "all" | "seen" | "unseen") => void;
+   239→  tags: string[];
+   240→  selectedTag: string | null;
+   241→  setSelectedTag: (t: string | null) => void;
+   242→  dueCount: number;
+   243→  totalCards: number;
+   244→  loading: boolean;
+   245→  onStart: () => void;
+   246→  savedSession: {
+   247→    index: number;
+   248→    total: number;
+   249→    counts: { again: number; hard: number; good: number; easy: number };
+   250→    mode: string;
+   251→    interaction: string;
+   252→    direction: string;
+   253→    savedAt: number;
+   254→  } | null;
+   255→  onClearSession: () => void;
+   256→}) {
+   257→  const exampleField = props.fields.find((f) => f.fieldType === "example");
+   258→  const clozeAvailable = !!exampleField && props.direction === "targetToSource";
+   259→
+   260→  // Auto-fall-back to passive if cloze was selected but became unavailable.
+   261→  useEffect(() => {
+   262→    if (props.interaction === "cloze" && !clozeAvailable) {
+   263→      props.setInteraction("passive");
+   264→    }
+   265→  }, [clozeAvailable, props]);
+   266→
+   267→  const interactions = [
+   268→    { v: "passive", label: "Passive", icon: Eye, desc: "Flip card, rate yourself", always: true },
+   269→    { v: "typing", label: "Typing", icon: Keyboard, desc: "Type the answer", always: true },
+   270→    { v: "multiple", label: "Multiple", icon: CheckSquare, desc: "Pick from 4 options", always: false },
+   271→    { v: "cloze", label: "Cloze", icon: Sparkles, desc: "Fill in the blank", always: false },
+   272→  ];
+   273→
+   274→  return (
+   275→    <div>
+   276→      <div className="flex items-start justify-between gap-4 mb-6">
+   277→        <div>
+   278→          <h1 className="font-display text-3xl font-semibold mb-1">Study</h1>
+   279→          <p className="text-secondary">{props.deckName}</p>
+   280→        </div>
+   281→        <ShortcutsHelp />
+   282→      </div>
+   283→
+   284→      {/* Resume session banner */}
+   285→      {props.savedSession && (
+   286→        <div
+   287→          className="mb-4 p-4 rounded-xl flex items-center justify-between gap-3 animate-slide-up"
+   288→          style={{
+   289→            background:
+   290→              "linear-gradient(135deg, var(--accent-glow), color-mix(in srgb, var(--accent-warm) 8%, transparent))",
+   291→            border: "1px solid color-mix(in srgb, var(--accent-warm) 25%, transparent)",
+   292→          }}
+   293→        >
+   294→          <div className="flex items-center gap-3">
+   295→            <Clock className="size-5 text-[var(--accent-warm)] shrink-0" />
+   296→            <div>
+   297→              <div className="text-sm font-medium">Previous session in progress</div>
+   298→              <div className="text-xs text-muted">
+   299→                Card {props.savedSession.index + 1} of {props.savedSession.total} ·{" "}
+   300→                {props.savedSession.counts.good + props.savedSession.counts.easy} correct ·{" "}
+   301→                {props.savedSession.counts.again} again
+   302→              </div>
+   303→            </div>
+   304→          </div>
+   305→          <button
+   306→            onClick={props.onClearSession}
+   307→            className="text-xs text-muted hover:text-[var(--text-primary)] transition-colors shrink-0"
+   308→          >
+   309→            Dismiss
+   310→          </button>
+   311→        </div>
+   312→      )}
+   313→
+   314→      <div className="pc-card p-5 space-y-5">
+   315→        {/* Mode */}
+   316→        <div>
+   317→          <Label className="text-sm font-medium mb-2 block">Study Mode</Label>
+   318→          <div className="grid grid-cols-2 gap-2">
+   319→            <ModeButton
+   320→              active={props.mode === "learn"}
+   321→              onClick={() => props.setMode("learn")}
+   322→              title="Learn"
+   323→              desc={`${props.dueCount} due`}
+   324→              icon={Play}
+   325→            />
+   326→            <ModeButton
+   327→              active={props.mode === "freestyle"}
+   328→              onClick={() => props.setMode("freestyle")}
+   329→              title="Freestyle"
+   330→              desc="Practice all (no SRS)"
+   331→              icon={Shuffle}
+   332→            />
+   333→          </div>
+   334→        </div>
+   335→
+   336→        {/* Direction */}
+   337→        <div>
+   338→          <Label className="text-sm font-medium mb-2 block">Direction</Label>
+   339→          <div className="grid grid-cols-2 gap-2">
+   340→            <ModeButton
+   341→              active={props.direction === "targetToSource"}
+   342→              onClick={() => props.setDirection("targetToSource")}
+   343→              title={`${props.targetLanguage} → ${props.sourceLanguage}`}
+   344→              desc="See target, recall source"
+   345→              icon={ArrowRight}
+   346→            />
+   347→            <ModeButton
+   348→              active={props.direction === "sourceToTarget"}
+   349→              onClick={() => props.setDirection("sourceToTarget")}
+   350→              title={`${props.sourceLanguage} → ${props.targetLanguage}`}
+   351→              desc="See source, type target"
+   352→              icon={ArrowLeftRight}
+   353→            />
+   354→          </div>
+   355→        </div>
+   356→
+   357→        {/* Interaction */}
+   358→        <div>
+   359→          <Label className="text-sm font-medium mb-2 block">Interaction</Label>
+   360→          <div className="grid grid-cols-2 gap-2">
+   361→            {interactions.map((i) => {
+   362→              const available = i.always || (i.v === "multiple" ? true : i.v === "cloze" ? clozeAvailable : true);
+   363→              return (
+   364→                <ModeButton
+   365→                  key={i.v}
+   366→                  active={props.interaction === i.v}
+   367→                  onClick={() => available && props.setInteraction(i.v as typeof props.interaction)}
+   368→                  title={i.label}
+   369→                  desc={i.desc}
+   370→                  icon={i.icon}
+   371→                  disabled={!available}
+   372→                />
+   373→              );
+   374→            })}
+   375→          </div>
+   376→          {!clozeAvailable && (
+   377→            <p className="text-xs text-muted mt-1.5">
+   378→              Cloze requires an example field and target→source direction.
+   379→            </p>
+   380→          )}
+   381→        </div>
+   382→
+   383→        {/* Options */}
+   384→        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   385→          <div className="space-y-1.5">
+   386→            <Label>Batch size</Label>
+   387→            <Input
+   388→              type="number"
+   389→              min={1}
+   390→              max={500}
+   391→              value={props.batchSize}
+   392→              onChange={(e) =>
+   393→                props.setBatchSize(
+   394→                  Math.max(1, Math.min(500, Number(e.target.value) || 20))
+   395→                )
+   396→              }
+   397→              className="bg-elevated border surface-border"
+   398→            />
+   399→            <p className="text-xs text-muted">Cards loaded per session</p>
+   400→          </div>
+   401→
+   402→          {props.mode === "freestyle" && (
+   403→            <div className="space-y-1.5">
+   404→              <Label>Card pool</Label>
+   405→              <div className="flex gap-1.5">
+   406→                {(["all", "seen", "unseen"] as const).map((p) => (
+   407→                  <button
+   408→                    key={p}
+   409→                    onClick={() => props.setPool(p)}
+   410→                    className={cn(
+   411→                      "flex-1 px-2 py-1.5 rounded-lg text-xs capitalize transition-colors",
+   412→                      props.pool === p
+   413→                        ? "bg-[var(--accent-glow)] text-[var(--accent-primary)]"
+   414→                        : "bg-elevated text-secondary hover:text-[var(--text-primary)]"
+   415→                    )}
+   416→                  >
+   417→                    {p}
+   418→                  </button>
+   419→                ))}
+   420→              </div>
+   421→            </div>
+   422→          )}
+   423→        </div>
+   424→
+   425→        {/* Tag filter */}
+   426→        {props.tags.length > 0 && (
+   427→          <div className="space-y-1.5">
+   428→            <Label>Filter by tag</Label>
+   429→            <div className="flex flex-wrap gap-1.5">
+   430→              <button
+   431→                onClick={() => props.setSelectedTag(null)}
+   432→                className={cn(
+   433→                  "px-2.5 py-1 rounded-full text-xs transition-colors",
+   434→                  props.selectedTag === null
+   435→                    ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+   436→                    : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+   437→                )}
+   438→              >
+   439→                All tags
+   440→              </button>
+   441→              {props.tags.map((t) => (
+   442→                <button
+   443→                  key={t}
+   444→                  onClick={() => props.setSelectedTag(t)}
+   445→                  className={cn(
+   446→                    "px-2.5 py-1 rounded-full text-xs transition-colors",
+   447→                    props.selectedTag === t
+   448→                      ? "bg-[var(--accent-glow)] text-[var(--accent-primary)] border border-[var(--accent-primary)]/30"
+   449→                      : "bg-elevated text-secondary hover:text-[var(--text-primary)] border border-transparent"
+   450→                  )}
+   451→                >
+   452→                  {t}
+   453→                </button>
+   454→              ))}
+   455→            </div>
+   456→          </div>
+   457→        )}
+   458→
+   459→        <label className="flex items-center justify-between cursor-pointer">
+   460→          <div>
+   461→            <Label>Randomise order</Label>
+   462→            <p className="text-xs text-muted">Shuffle card order each session</p>
+   463→          </div>
+   464→          <Switch
+   465→            checked={props.randomise}
+   466→            onCheckedChange={props.setRandomise}
+   467→          />
+   468→        </label>
+   469→
+   470→        {/* Start */}
+   471→        <div className="pt-2 border-t subtle-border">
+   472→          {props.loading ? (
+   473→            <Skeleton className="h-11 rounded-lg shimmer" />
+   474→          ) : props.mode === "learn" && props.dueCount === 0 ? (
+   475→            <div className="text-center py-3">
+   476→              <p className="text-[var(--accent-secondary)] font-medium">
+   477→                ✓ Nothing due — great job!
+   478→              </p>
+   479→              <p className="text-xs text-muted mt-1">
+   480→                Switch to Freestyle to review ahead.
+   481→              </p>
+   482→            </div>
+   483→          ) : (
+   484→            <Button
+   485→              className="btn-primary w-full h-11 gap-2"
+   486→              onClick={props.onStart}
+   487→            >
+   488→              <Play className="size-4" />
+   489→              Start ·{" "}
+   490→              {props.mode === "learn" ? props.dueCount : props.totalCards} cards
+   491→            </Button>
+   492→          )}
+   493→        </div>
+   494→      </div>
+   495→    </div>
+   496→  );
+   497→}
+   498→
+   499→function ModeButton({
+   500→  active,
+   501→  onClick,
+   502→  title,
+   503→  desc,
+   504→  icon: Icon,
+   505→  disabled,
+   506→}: {
+   507→  active: boolean;
+   508→  onClick: () => void;
+   509→  title: string;
+   510→  desc: string;
+   511→  icon: typeof Eye;
+   512→  disabled?: boolean;
+   513→}) {
+   514→  return (
+   515→    <button
+   516→      onClick={onClick}
+   517→      disabled={disabled}
+   518→      className={cn(
+   519→        "flex items-start gap-2.5 p-3 rounded-xl border text-left transition-all",
+   520→        disabled && "opacity-40 cursor-not-allowed",
+   521→        active
+   522→          ? "bg-[var(--accent-glow)] border-[var(--accent-primary)]/40"
+   523→          : "bg-elevated border surface-border hover:border-[var(--accent-primary)]/30"
+   524→      )}
+   525→    >
+   526→      <Icon
+   527→        className={cn(
+   528→          "size-4 mt-0.5 shrink-0",
+   529→          active ? "text-[var(--accent-primary)]" : "text-muted"
+   530→        )}
+   531→      />
+   532→      <div className="min-w-0">
+   533→        <div className="text-sm font-medium truncate">{title}</div>
+   534→        <div className="text-xs text-muted truncate">{desc}</div>
+   535→      </div>
+   536→    </button>
+   537→  );
+   538→}
+   539→
+   540→// ============== Session ==============
+   541→
+   542→function getAnswer(
+   543→  card: CardData,
+   544→  direction: Direction,
+   545→  fields: BlueprintFieldDef[],
+   546→  latinTyping?: boolean,
+   547→  romanisationField?: string
+   548→): string {
+   549→  if (direction === "targetToSource") {
+   550→    // Recall the source-language translation.
+   551→    const srcField =
+   552→      fields.find((f) => f.key === "source_translation") ||
+   553→      fields.find((f) => f.key === "definition") ||
+   554→      fields.find((f) => f.key === "reading") ||
+   555→      fields[0];
+   556→    const raw = srcField ? card.fields[srcField.key] : null;
+   557→    return raw ? fieldValueToAnnotated(raw)?.text || "" : card.word;
+   558→  }
+   559→  // sourceToTarget — recall the target-language word.
+   560→  if (latinTyping && romanisationField) {
+   561→    const romVal = card.fields[romanisationField];
+   562→    const romText = fieldValueToAnnotated(romVal)?.text;
+   563→    if (romText) return romText;
+   564→  }
+   565→  return card.word;
+   566→}
+   567→
+   568→function StudySession(props: {
+   569→  deckId: string;
+   570→  cards: CardData[];
+   571→  index: number;
+   572→  setIndex: (i: number | ((p: number) => number)) => void;
+   573→  interaction: "passive" | "typing" | "multiple" | "cloze";
+   574→  direction: Direction;
+   575→  fields: BlueprintFieldDef[];
+   576→  targetLanguage: string;
+   577→  sourceLanguage: string;
+   578→  contextLanguage: string;
+   579→  strictAccents: boolean;
+   580→  strictMode: boolean;
+   581→  latinTyping: boolean;
+   582→  romanisationField: string;
+   583→  onComplete: (r: SessionResult) => void;
+   584→  onExit: () => void;
+   585→  ttsEnabled: boolean;
+   586→  ttsRate: number;
+   587→  mode: "learn" | "freestyle";
+   588→}) {
+   589→  const reviewMut = useReviewCard(props.deckId);
+   590→  const { setView } = useUi();
+   591→  const card = props.cards[props.index];
+   592→  const [flipped, setFlipped] = useState(false);
+   593→  const [typingAnswer, setTypingAnswer] = useState("");
+   594→  const [clozeAnswer, setClozeAnswer] = useState("");
+   595→  const [lastResult, setLastResult] = useState<{
+   596→    correct: boolean;
+   597→    similarity: number;
+   598→    exact: boolean;
+   599→    answer: string;
+   600→    typed: string;
+   601→  } | null>(null);
+   602→  const [choices, setChoices] = useState<CardData[]>([]);
+   603→  const [counts, setCounts] = useState({ again: 0, hard: 0, good: 0, easy: 0 });
+   604→  const startTimeRef = useRef(Date.now());
+   605→  const typingInputRef = useRef<HTMLInputElement>(null);
+   606→  const clozeInputRef = useRef<HTMLInputElement>(null);
+   607→
+   608→  const exampleField = useMemo(
+   609→    () => props.fields.find((f) => f.fieldType === "example"),
+   610→    [props.fields]
+   611→  );
+   612→
+   613→  // Cloze data for the current card — memoise the chosen sentence once per card
+   614→  // so the input width and the grading use the SAME sentence (fixes the
+   615→  // multi-sentence inconsistency from the original repo).
+   616→  const clozeData = useMemo(() => {
+   617→    if (props.interaction !== "cloze" || !exampleField || !card) return null;
+   618→    const fieldVal = card.fields[exampleField.key];
+   619→    const ann = fieldValueToAnnotated(fieldVal);
+   620→    const raw = ann?.text || (typeof fieldVal === "string" ? fieldVal : "");
+   621→    if (!raw) return null;
+   622→    const sentence = pickRandomExample(raw);
+   623→    return parseCloze(sentence);
+   624→  }, [props.index, props.interaction, exampleField, card]);
+   625→
+   626→  // Reset state when the card changes.
+   627→  useEffect(() => {
+   628→    setFlipped(false);
+   629→    setTypingAnswer("");
+   630→    setClozeAnswer("");
+   631→    setLastResult(null);
+   632→    startTimeRef.current = Date.now();
+   633→    if (props.interaction === "multiple") {
+   634→      const others = props.cards.filter((c) => c.id !== card.id);
+   635→      const shuffled = [...others]
+   636→        .sort(() => Math.random() - 0.5)
+   637→        .slice(0, 3);
+   638→      setChoices([...shuffled, card].sort(() => Math.random() - 0.5));
+   639→    }
+   640→    // Auto-speak the target word on new card (passive mode)
+   641→    if (props.ttsEnabled && props.interaction === "passive" && props.direction === "targetToSource") {
+   642→      const word = card.word;
+   643→      setTimeout(
+   644→        () =>
+   645→          speak(word, {
+   646→            lang: getLanguageBcp47(props.targetLanguage),
+   647→            rate: props.ttsRate,
+   648→          }),
+   649→        200
+   650→      );
+   651→    }
+   652→  }, [props.index]);
+   653→
+   654→  // Auto-focus the relevant input on a new card.
+   655→  useEffect(() => {
+   656→    if (flipped) return;
+   657→    const t = setTimeout(() => {
+   658→      if (props.interaction === "typing") typingInputRef.current?.focus();
+   659→      else if (props.interaction === "cloze") clozeInputRef.current?.focus();
+   660→    }, 80);
+   661→    return () => clearTimeout(t);
+   662→  }, [props.index, props.interaction, flipped]);
+   663→
+   664→  const reveal = (result: {
+   665→    correct: boolean;
+   666→    similarity: number;
+   667→    exact: boolean;
+   668→    answer: string;
+   669→    typed: string;
+   670→  }) => {
+   671→    setLastResult(result);
+   672→    setFlipped(true);
+   673→    // Auto-rate in learn mode for active interactions.
+   674→    if (props.mode === "learn" && props.interaction !== "passive") {
+   675→      const rating: Rating = result.correct ? 3 : 1;
+   676→      reviewMut.mutate({
+   677→        cardId: card.id,
+   678→        rating,
+   679→        timeSpentMs: Date.now() - startTimeRef.current,
+   680→      });
+   681→      setCounts((p) => ({
+   682→        ...p,
+   683→        again: p.again + (rating === 1 ? 1 : 0),
+   684→        good: p.good + (rating === 3 ? 1 : 0),
+   685→      }));
+   686→    }
+   687→  };
+   688→
+   689→  const submitTyping = () => {
+   690→    if (!card) return;
+   691→    const expected = getAnswer(card, props.direction, props.fields, props.latinTyping, props.romanisationField);
+   692→    const g = gradeAnswer(
+   693→      expected,
+   694→      typingAnswer,
+   695→      props.strictMode,
+   696→      props.strictAccents
+   697→    );
+   698→    reveal({
+   699→      ...g,
+   700→      answer: expected,
+   701→      typed: typingAnswer,
+   702→    });
+   703→  };
+   704→
+   705→  const submitCloze = () => {
+   706→    if (!card || !clozeData?.hasCloze) return;
+   707→    const g = gradeAnswer(
+   708→      clozeData.answer,
+   709→      clozeAnswer,
+   710→      props.strictMode,
+   711→      props.strictAccents
+   712→    );
+   713→    reveal({
+   714→      ...g,
+   715→      answer: clozeData.answer,
+   716→      typed: clozeAnswer,
+   717→    });
+   718→  };
+   719→
+   720→  const next = () => {
+   721→    if (props.index + 1 >= props.cards.length) {
+   722→      props.onComplete({
+   723→        reviewed: props.index + 1,
+   724→        again: counts.again,
+   725→        hard: counts.hard,
+   726→        good: counts.good,
+   727→        easy: counts.easy,
+   728→        correct: counts.good + counts.easy,
+   729→      });
+   730→      return;
+   731→    }
+   732→    props.setIndex((i) => i + 1);
+   733→  };
+   734→
+   735→  const rate = (rating: Rating) => {
+   736→    reviewMut.mutate({
+   737→      cardId: card.id,
+   738→      rating,
+   739→      timeSpentMs: Date.now() - startTimeRef.current,
+   740→    });
+   741→    setCounts((p) => ({
+   742→      again: p.again + (rating === 1 ? 1 : 0),
+   743→      hard: p.hard + (rating === 2 ? 1 : 0),
+   744→      good: p.good + (rating === 3 ? 1 : 0),
+   745→      easy: p.easy + (rating === 4 ? 1 : 0),
+   746→    }));
+   747→    next();
+   748→  };
+   749→
+   750→  // Keyboard shortcuts — skip when focused in an input/textarea/select.
+   751→  useEffect(() => {
+   752→    const handler = (e: KeyboardEvent) => {
+   753→      const tag = (e.target as HTMLElement)?.tagName;
+   754→      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+   755→      if (e.key === "Escape") {
+   756→        props.onExit();
+   757→      } else if (e.key === " " || e.key === "Enter") {
+   758→        e.preventDefault();
+   759→        if (props.interaction === "passive") {
+   760→          if (!flipped) setFlipped(true);
+   761→          else next();
+   762→        } else if (flipped) {
+   763→          next();
+   764→        }
+   765→      } else if (["1", "2", "3", "4"].includes(e.key) && flipped && props.interaction === "passive") {
+   766→        e.preventDefault();
+   767→        rate(Number(e.key) as Rating);
+   768→      } else if (e.key === "s" || e.key === "S") {
+   769→        // Skip card
+   770→        e.preventDefault();
+   771→        next();
+   772→      } else if ((e.key === "p" || e.key === "P" || e.key === "ArrowLeft") && props.index > 0) {
+   773→        // Previous card
+   774→        e.preventDefault();
+   775→        props.setIndex((i) => Math.max(0, i - 1));
+   776→      } else if ((e.key === "ArrowRight") && props.index < props.cards.length - 1) {
+   777→        // Next card (skip)
+   778→        e.preventDefault();
+   779→        props.setIndex((i) => Math.min(props.cards.length - 1, i + 1));
+   780→      }
+   781→    };
+   782→    window.addEventListener("keydown", handler);
+   783→    return () => window.removeEventListener("keydown", handler);
+   784→  }, [flipped, props.interaction, props.index]);
+   785→
+   786→  if (!card) return null;
+   787→
+   788→  const progress = ((props.index + 1) / props.cards.length) * 100;
+   789→  const isTargetFront = props.direction === "targetToSource";
+   790→
+   791→  // Front content for the card.
+   792→  const frontWord = isTargetFront
+   793→    ? card.word
+   794→    : getAnswer(card, "targetToSource", props.fields) || card.word;
+   795→  const frontLabel = isTargetFront
+   796→    ? props.targetLanguage
+   797→    : props.sourceLanguage;
+   798→
+   799→  // Context chip / cloze preview for target→source front.
+   800→  const contextVal =
+   801→    typeof card.fields.context === "string" ? card.fields.context : "";
+   802→  let clozePreview: { before: string; after: string; answer: string } | null = null;
+   803→  if (isTargetFront && props.contextLanguage === "cloze" && exampleField) {
+   804→    const fieldVal = card.fields[exampleField.key];
+   805→    const ann = fieldValueToAnnotated(fieldVal);
+   806→    const raw = ann?.text || (typeof fieldVal === "string" ? fieldVal : "");
+   807→    if (raw) {
+   808→      const parsed = parseCloze(pickRandomExample(raw));
+   809→      if (parsed.hasCloze)
+   810→        clozePreview = {
+   811→          before: parsed.before,
+   812→          after: parsed.after,
+   813→          answer: parsed.answer,
+   814→        };
+   815→    }
+   816→  }
+   817→
+   818→  const frontShowField = props.fields.find(
+   819→    (f) => f.showOnFront && f.key !== "context"
+   820→  );
+   821→
+   822→  return (
+   823→    <div>
+   824→      {/* Top bar */}
+   825→      <div className="flex items-center gap-3 mb-4">
+   826→        <button
+   827→          onClick={props.onExit}
+   828→          className="text-muted hover:text-[var(--accent-danger)] p-1"
+   829→          aria-label="Exit session"
+   830→        >
+   831→          <X className="size-5" />
+   832→        </button>
+   833→        <div className="flex-1 progress-track h-1.5">
+   834→          <div className="progress-fill" style={{ width: `${progress}%` }} />
+   835→        </div>
+   836→        <div className="flex items-center gap-1.5 shrink-0">
+   837→          <button
+   838→            onClick={() => props.setIndex((i) => Math.max(0, i - 1))}
+   839→            disabled={props.index === 0}
+   840→            className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded transition-colors"
+   841→            aria-label="Previous card"
+   842→            title="Previous card"
+   843→          >
+   844→            <ChevronLeft className="size-4" />
+   845→          </button>
+   846→          <span className="text-xs text-muted font-mono whitespace-nowrap">
+   847→            {props.index + 1} / {props.cards.length}
+   848→          </span>
+   849→          <button
+   850→            onClick={() =>
+   851→              props.setIndex((i) => Math.min(props.cards.length - 1, i + 1))
+   852→            }
+   853→            disabled={props.index === props.cards.length - 1}
+   854→            className="text-muted hover:text-[var(--text-primary)] disabled:opacity-30 disabled:cursor-not-allowed p-1 rounded transition-colors"
+   855→            aria-label="Next card"
+   856→            title="Next card (skip)"
+   857→          >
+   858→            <ChevronRight className="size-4" />
+   859→          </button>
+   860→        </div>
+   861→      </div>
+   862→
+   863→      {/* Live session stats */}
+   864→      {(counts.again > 0 || counts.good > 0 || counts.easy > 0) && (
+   865→        <div className="flex items-center justify-center gap-3 mb-3 text-xs">
+   866→          <span className="flex items-center gap-1 text-[var(--accent-secondary)]">
+   867→            <Check className="size-3" /> {counts.good + counts.easy}
+   868→          </span>
+   869→          {counts.hard > 0 && (
+   870→            <span className="text-[var(--accent-warm)]">Hard: {counts.hard}</span>
+   871→          )}
+   872→          {counts.again > 0 && (
+   873→            <span className="text-[var(--accent-danger)]">Again: {counts.again}</span>
+   874→          )}
+   875→        </div>
+   876→      )}
+   877→
+   878→      {/* Mode badge */}
+   879→      <div className="flex justify-center mb-4 gap-2">
+   880→        <span className="pc-tag capitalize">
+   881→          {props.interaction === "multiple" ? "Multiple choice" : props.interaction}
+   882→        </span>
+   883→        <span className="pc-tag">
+   884→          {isTargetFront ? props.targetLanguage : props.sourceLanguage}
+   885→        </span>
+   886→      </div>
+   887→
+   888→      {/* 3D flip card */}
+   889→      <div
+   890→        className="card-3d w-full max-w-lg mx-auto"
+   891→        style={{ height: 300 }}
+   892→      >
+   893→        <div
+   894→          className={cn("card-inner", flipped && "flipped")}
+   895→          onClick={() =>
+   896→            props.interaction === "passive" && !flipped ? setFlipped(true) : undefined
+   897→          }
+   898→          style={{ cursor: props.interaction === "passive" && !flipped ? "pointer" : "default" }}
+   899→        >
+   900→          {/* FRONT */}
+   901→          <div className="card-face pc-card-elevated rounded-2xl p-6 flex flex-col items-center justify-center text-center">
+   902→            <div className="section-title mb-3">{frontLabel}</div>
+   903→            <div
+   904→              className={cn(
+   905→                "text-5xl font-display font-semibold leading-tight",
+   906→                containsCJK(frontWord) && "font-cjk"
+   907→              )}
+   908→            >
+   909→              {frontWord}
+   910→            </div>
+   911→
+   912→            {/* Cloze preview on the front (target→source, context_language='cloze') */}
+   913→            {isTargetFront && clozePreview && (
+   914→              <div className="mt-3 px-3 py-2 rounded-lg w-full bg-surface border surface-border">
+   915→                <div className={cn("text-sm leading-relaxed text-secondary", containsCJK(clozePreview.before + clozePreview.after) && "font-cjk")}>
+   916→                  {clozePreview.before}
+   917→                  <span className="px-1.5 rounded font-medium bg-elevated text-muted">
+   918→                    ___
+   919→                  </span>
+   920→                  {clozePreview.after}
+   921→                </div>
+   922→              </div>
+   923→            )}
+   924→
+   925→            {/* Context chip (target→source, context_language='target') */}
+   926→            {isTargetFront && contextVal && !clozePreview && (
+   927→              <div className="mt-3 px-3 py-1.5 rounded-lg bg-[var(--accent-glow)] border border-[var(--accent-primary)]/20">
+   928→                <div className={cn("text-sm font-medium text-[var(--accent-primary)]", containsCJK(contextVal) && "font-cjk")}>
+   929→                  {contextVal}
+   930→                </div>
+   931→              </div>
+   932→            )}
+   933→
+   934→            {/* Show-on-front field (e.g. reading/phonetic) */}
+   935→            {isTargetFront && frontShowField && card.fields[frontShowField.key] && (
+   936→              <div className="mt-3 text-base text-secondary">
+   937→                <RubyText
+   938→                  value={card.fields[frontShowField.key]}
+   939→                  phonetics={frontShowField.phonetics}
+   940→                />
+   941→              </div>
+   942→            )}
+   943→
+   944→            {!flipped && props.interaction === "passive" && (
+   945→              <div className="absolute bottom-4 text-xs text-muted">
+   946→                tap to reveal · Space
+   947→              </div>
+   948→            )}
+   949→            {props.ttsEnabled && isTtsSupported() && isTargetFront && (
+   950→              <button
+   951→                onClick={(e) => {
+   952→                  e.stopPropagation();
+   953→                  speak(card.word, {
+   954→                    lang: getLanguageBcp47(props.targetLanguage),
+   955→                    rate: props.ttsRate,
+   956→                  });
+   957→                }}
+   958→                className="absolute top-4 right-4 text-muted hover:text-[var(--accent-primary)] p-1"
+   959→                aria-label="Pronounce word"
+   960→              >
+   961→                <Volume2 className="size-4" />
+   962→              </button>
+   963→            )}
+   964→          </div>
+   965→
+   966→          {/* BACK */}
+   967→          <div className="card-face card-back pc-card-elevated rounded-2xl p-5 flex flex-col overflow-y-auto scrollbar-thin relative">
+   968→            {/* Edit card button */}
+   969→            <button
+   970→              onClick={() => setView({ name: "deck", deckId: props.deckId })}
+   971→              className="absolute top-3 right-3 text-muted hover:text-[var(--accent-primary)] p-1 rounded transition-colors z-10"
+   972→              aria-label="Edit this card"
+   973→              title="Edit card"
+   974→            >
+   975→              <Edit className="size-3.5" />
+   976→            </button>
+   977→            <div className="flex items-center gap-3 mb-3">
+   978→              <div
+   979→                className={cn(
+   980→                  "text-2xl font-display font-semibold text-[var(--accent-primary)]",
+   981→                  containsCJK(card.word) && "font-cjk"
+   982→                )}
+   983→              >
+   984→                {card.word}
+   985→              </div>
+   986→              {card.interval > 0 && (
+   987→                <span className="pc-tag">{formatIntervalDays(card.interval)} interval</span>
+   988→              )}
+   989→              {card.tags?.length > 0 && (
+   990→                <div className="flex flex-wrap gap-1 ml-1">
+   991→                  {card.tags.slice(0, 3).map((t) => (
+   992→                    <span
+   993→                      key={t}
+   994→                      className="pc-tag !text-[0.6rem] !py-0 !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent"
+   995→                    >
+   996→                      {t}
+   997→                    </span>
+   998→                  ))}
+   999→                </div>
+  1000→              )}
+  1001→              {lastResult && props.interaction !== "passive" && (
+  1002→                <span
+  1003→                  className={cn(
+  1004→                    "ml-auto text-xs font-semibold px-2 py-0.5 rounded-full",
+  1005→                    lastResult.correct
+  1006→                      ? "bg-[var(--accent-secondary)]/15 text-[var(--accent-secondary)]"
+  1007→                      : "bg-[var(--accent-danger)]/15 text-[var(--accent-danger)]"
+  1008→                  )}
+  1009→                >
+  1010→                  {lastResult.correct
+  1011→                    ? `✓ ${Math.round(lastResult.similarity * 100)}%`
+  1012→                    : "✗"}
+  1013→                </span>
+  1014→              )}
+  1015→            </div>
+  1016→
+  1017→            {/* Result detail for typing/cloze */}
+  1018→            {lastResult && (props.interaction === "typing" || props.interaction === "cloze") && (
+  1019→              <div className="text-sm text-center mb-3 space-y-1">
+  1020→                {lastResult.correct ? (
+  1021→                  <div className="font-medium text-[var(--accent-secondary)]">
+  1022→                    ✓ Correct!
+  1023→                    {lastResult.similarity < 1 &&
+  1024→                      ` (${Math.round(lastResult.similarity * 100)}%)`}
+  1025→                  </div>
+  1026→                ) : (
+  1027→                  <>
+  1028→                    <div className="text-[var(--accent-danger)]">
+  1029→                      <span className="font-medium">✗ You typed: </span>
+  1030→                      <span className="font-mono">{lastResult.typed || "—"}</span>
+  1031→                    </div>
+  1032→                    <div className="text-muted">
+  1033→                      <span>Correct: </span>
+  1034→                      <span className="font-medium text-[var(--text-primary)]">
+  1035→                        {lastResult.answer}
+  1036→                      </span>
+  1037→                    </div>
+  1038→                  </>
+  1039→                )}
+  1040→              </div>
+  1041→            )}
+  1042→
+  1043→            {/* All fields list */}
+  1044→            <div className="space-y-2 flex-1 overflow-y-auto scrollbar-thin">
+  1045→              {props.fields
+  1046→                .filter((f) => f.key !== "context")
+  1047→                .map((field) => {
+  1048→                  const value = card.fields[field.key];
+  1049→                  if (!value) return null;
+  1050→                  const ann = fieldValueToAnnotated(value);
+  1051→                  const text = ann?.text || (typeof value === "string" ? value : "");
+  1052→                  if (!text) return null;
+  1053→                  return (
+  1054→                    <div key={field.key} className="flex gap-2 min-w-0">
+  1055→                      <span
+  1056→                        className="section-title shrink-0 mt-0.5"
+  1057→                        style={{ width: 90 }}
+  1058→                      >
+  1059→                        {field.label}
+  1060→                      </span>
+  1061→                      <div
+  1062→                        className={cn(
+  1063→                          "flex-1 min-w-0 text-sm",
+  1064→                          containsCJK(text) && "font-cjk"
+  1065→                        )}
+  1066→                      >
+  1067→                        {field.fieldType === "example" ? (
+  1068→                          <ExampleDisplay value={value} />
+  1069→                        ) : (
+  1070→                          <RubyText
+  1071→                            value={value}
+  1072→                            phonetics={field.phonetics}
+  1073→                          />
+  1074→                        )}
+  1075→                      </div>
+  1076→                    </div>
+  1077→                  );
+  1078→                })}
+  1079→            </div>
+  1080→          </div>
+  1081→        </div>
+  1082→      </div>
+  1083→
+  1084→      {/* Interaction area below the card */}
+  1085→      <div className="mt-6">
+  1086→        {/* Typing input (shows before flip) */}
+  1087→        {!flipped && props.interaction === "typing" && (
+  1088→          <div className="pc-card p-4">
+  1089→            <div className="flex items-center justify-between mb-2">
+  1090→              <div className="section-title">
+  1091→                {props.latinTyping && props.romanisationField && !isTargetFront
+  1092→                  ? `Type in Latin script (${props.romanisationField})`
+  1093→                  : `Type the ${
+  1094→                      isTargetFront
+  1095→                        ? props.sourceLanguage
+  1096→                        : props.targetLanguage
+  1097→                    } answer`}
+  1098→              </div>
+  1099→              {props.latinTyping && props.romanisationField && !isTargetFront && (
+  1100→                <span className="pc-tag !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent">
+  1101→                  Romanisation mode
+  1102→                </span>
+  1103→              )}
+  1104→            </div>
+  1105→            <Input
+  1106→              ref={typingInputRef}
+  1107→              value={typingAnswer}
+  1108→              onChange={(e) => setTypingAnswer(e.target.value)}
+  1109→              onKeyDown={(e) => e.key === "Enter" && submitTyping()}
+  1110→              placeholder="Your answer..."
+  1111→              className={cn("bg-elevated border surface-border h-11 text-base", containsCJK(typingAnswer) && "font-cjk")}
+  1112→            />
+  1113→            <Button className="btn-primary w-full h-10 mt-3 gap-2" onClick={submitTyping}>
+  1114→              <Check className="size-4" /> Check
+  1115→            </Button>
+  1116→          </div>
+  1117→        )}
+  1118→
+  1119→        {/* Cloze: inline input within the sentence (the key feature) */}
+  1120→        {!flipped && props.interaction === "cloze" && clozeData?.hasCloze && (
+  1121→          <div className="pc-card p-5">
+  1122→            {/* Hint: show the source translation + context */}
+  1123→            {(() => {
+  1124→              const hintField =
+  1125→                props.fields.find((f) => f.key === "source_translation") ||
+  1126→                props.fields.find((f) => f.key === "definition") ||
+  1127→                props.fields.find((f) => f.key === "reading");
+  1128→              const hint = hintField
+  1129→                ? fieldValueToAnnotated(card.fields[hintField.key])?.text
+  1130→                : null;
+  1131→              const ctx =
+  1132→                typeof card.fields.context === "string"
+  1133→                  ? card.fields.context
+  1134→                  : "";
+  1135→              return hint ? (
+  1136→                <div className="flex items-center justify-between mb-3">
+  1137→                  <div className="section-title">{props.sourceLanguage}</div>
+  1138→                  <div className="text-right">
+  1139→                    <div className={cn("text-base font-medium", containsCJK(hint) && "font-cjk")}>
+  1140→                      {hint}
+  1141→                    </div>
+  1142→                    {ctx && (
+  1143→                      <div className="text-xs text-muted mt-0.5">{ctx}</div>
+  1144→                    )}
+  1145→                  </div>
+  1146→                </div>
+  1147→              ) : (
+  1148→                <div className="section-title mb-3">Complete the sentence</div>
+  1149→              );
+  1150→            })()}
+  1151→            {/* The sentence with the inline input where the blank is */}
+  1152→            <div
+  1153→              className={cn(
+  1154→                "text-center leading-loose mb-4",
+  1155→                containsCJK(clozeData.before + clozeData.after) && "font-cjk"
+  1156→              )}
+  1157→              style={{ fontSize: 18 }}
+  1158→            >
+  1159→              {clozeData.before}
+  1160→              <input
+  1161→                ref={clozeInputRef}
+  1162→                className="cloze-input"
+  1163→                style={{
+  1164→                  width: `${Math.max((clozeData.answer?.length || 4) + 2, 4) * 0.95}em`,
+  1165→                }}
+  1166→                value={clozeAnswer}
+  1167→                onChange={(e) => setClozeAnswer(e.target.value)}
+  1168→                onKeyDown={(e) => e.key === "Enter" && submitCloze()}
+  1169→              />
+  1170→              {clozeData.after}
+  1171→            </div>
+  1172→            <Button className="btn-primary w-full h-10 gap-2" onClick={submitCloze}>
+  1173→              <Check className="size-4" /> Check
+  1174→            </Button>
+  1175→          </div>
+  1176→        )}
+  1177→
+  1178→        {/* Multiple choice */}
+  1179→        {!flipped && props.interaction === "multiple" && (
+  1180→          <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
+  1181→            {choices.map((c, i) => (
+  1182→              <button
+  1183→                key={c.id}
+  1184→                onClick={() => {
+  1185→                  const correct = c.id === card.id;
+  1186→                  setTypingAnswer(c.word);
+  1187→                  reveal({
+  1188→                    correct,
+  1189→                    similarity: correct ? 1 : 0,
+  1190→                    exact: correct,
+  1191→                    answer: card.word,
+  1192→                    typed: c.word,
+  1193→                  });
+  1194→                }}
+  1195→                className={cn(
+  1196→                  "pc-card p-3 text-center font-medium hover:border-[var(--accent-primary)]/40 transition-colors",
+  1197→                  containsCJK(c.word) && "font-cjk"
+  1198→                )}
+  1199→              >
+  1200→                <span className="text-xs text-muted mr-1.5">{i + 1}.</span>
+  1201→                {c.word}
+  1202→              </button>
+  1203→            ))}
+  1204→          </div>
+  1205→        )}
+  1206→
+  1207→        {/* Rating buttons (passive after flip, or continue for active modes) */}
+  1208→        {flipped && props.interaction === "passive" && (
+  1209→          <RatingButtons card={card} onRate={rate} />
+  1210→        )}
+  1211→        {flipped && props.interaction !== "passive" && (
+  1212→          <div className="text-center">
+  1213→            <Button
+  1214→              className="btn-primary h-11 px-8 gap-2"
+  1215→              onClick={next}
+  1216→            >
+  1217→              Continue · Space
+  1218→            </Button>
+  1219→          </div>
+  1220→        )}
+  1221→
+  1222→        {/* Passive reveal hint */}
+  1223→        {!flipped && props.interaction === "passive" && (
+  1224→          <div className="text-center text-sm text-muted">
+  1225→            Press Space or tap the card to reveal the answer
+  1226→          </div>
+  1227→        )}
+  1228→      </div>
+  1229→    </div>
+  1230→  );
+  1231→}
+  1232→
+  1233→// Render an example field value, highlighting the cloze word.
+  1234→function ExampleDisplay({ value }: { value: unknown }) {
+  1235→  const ann = fieldValueToAnnotated(value);
+  1236→  const raw = ann?.text || (typeof value === "string" ? value : "");
+  1237→  if (!raw) return null;
+  1238→  // Pick one sentence (stable per render — caller re-renders on card change).
+  1239→  const sentence = pickRandomExample(raw);
+  1240→  const parsed = parseCloze(sentence);
+  1241→  return (
+  1242→    <span>
+  1243→      {parsed.hasCloze ? (
+  1244→        <>
+  1245→          {parsed.before}
+  1246→          <mark
+  1247→            className="px-1 rounded"
+  1248→            style={{
+  1249→              background: "rgba(124,106,240,0.2)",
+  1250→              color: "var(--accent-primary)",
+  1251→              borderRadius: 3,
+  1252→              padding: "0 3px",
+  1253→            }}
+  1254→          >
+  1255→            {parsed.answer}
+  1256→          </mark>
+  1257→          {parsed.after}
+  1258→        </>
+  1259→      ) : (
+  1260→        sentence
+  1261→      )}
+  1262→    </span>
+  1263→  );
+  1264→}
+  1265→
+  1266→function RatingButtons({
+  1267→  card,
+  1268→  onRate,
+  1269→}: {
+  1270→  card: CardData;
+  1271→  onRate: (r: Rating) => void;
+  1272→}) {
+  1273→  const prev: SrsStateData = {
+  1274→    srsState: card.srsState,
+  1275→    stability: card.stability,
+  1276→    difficulty: card.difficulty,
+  1277→    repetitions: card.repetitions,
+  1278→    interval: card.interval,
+  1279→    seen: card.seen,
+  1280→    learningStep: card.learningStep,
+  1281→    lastReviewedAt: card.lastReviewedAt ? new Date(card.lastReviewedAt) : null,
+  1282→    dueAt: new Date(card.dueAt),
+  1283→  };
+  1284→
+  1285→  const ratings: { value: Rating; label: string; cls: string; key: string }[] = [
+  1286→    { value: 1, label: "Again", cls: "again", key: "1" },
+  1287→    { value: 2, label: "Hard", cls: "hard", key: "2" },
+  1288→    { value: 3, label: "Good", cls: "good", key: "3" },
+  1289→    { value: 4, label: "Easy", cls: "easy", key: "4" },
+  1290→  ];
+  1291→
+  1292→  return (
+  1293→    <div className="grid grid-cols-4 gap-2 max-w-lg mx-auto">
+  1294→      {ratings.map((r) => (
+  1295→        <button
+  1296→          key={r.value}
+  1297→          onClick={() => onRate(r.value)}
+  1298→          className={cn("rating-btn", r.cls)}
+  1299→        >
+  1300→          <span className="text-sm font-medium">{r.label}</span>
+  1301→          <span className="text-[0.7rem] text-muted">
+  1302→            {predictInterval(prev, r.value)}
+  1303→          </span>
+  1304→          <span className="text-[0.65rem] text-muted opacity-60">{r.key}</span>
+  1305→        </button>
+  1306→      ))}
+  1307→    </div>
+  1308→  );
+  1309→}
+  1310→
+  1311→// ============== Complete ==============
+  1312→
+  1313→function StudyComplete({
+  1314→  result,
+  1315→  onBack,
+  1316→}: {
+  1317→  result: SessionResult;
+  1318→  onBack: () => void;
+  1319→}) {
+  1320→  const correctPct = result.reviewed
+  1321→    ? Math.round((result.correct / result.reviewed) * 100)
+  1322→    : 0;
+  1323→  return (
+  1324→    <div className="max-w-md mx-auto text-center animate-slide-up">
+  1325→      <div className="text-5xl mb-4">
+  1326→        {correctPct >= 80 ? "🎉" : correctPct >= 50 ? "👍" : "💪"}
+  1327→      </div>
+  1328→      <h2 className="font-display text-3xl font-semibold mb-1">
+  1329→        Session Complete
+  1330→      </h2>
+  1331→      <p className="text-secondary mb-6">
+  1332→        {result.reviewed} {result.reviewed === 1 ? "card" : "cards"} reviewed ·{" "}
+  1333→        {correctPct}% correct
+  1334→      </p>
+  1335→
+  1336→      <div className="grid grid-cols-4 gap-2 mb-6">
+  1337→        <StatBox label="Reviewed" value={result.reviewed} color="var(--text-primary)" />
+  1338→        <StatBox label="Good" value={result.good} color="var(--accent-secondary)" />
+  1339→        <StatBox label="Hard" value={result.hard} color="var(--accent-warm)" />
+  1340→        <StatBox label="Again" value={result.again} color="var(--accent-danger)" />
+  1341→      </div>
+  1342→
+  1343→      <div className="progress-track h-2 mb-6">
+  1344→        <div className="progress-fill" style={{ width: `${correctPct}%` }} />
+  1345→      </div>
+  1346→
+  1347→      <Button className="btn-primary h-11 px-8 gap-2" onClick={onBack}>
+  1348→        <ArrowLeft className="size-4" /> Back to Setup
+  1349→      </Button>
+  1350→    </div>
+  1351→  );
+  1352→}
+  1353→
+  1354→function StatBox({
+  1355→  label,
+  1356→  value,
+  1357→  color,
+  1358→}: {
+  1359→  label: string;
+  1360→  value: number;
+  1361→  color: string;
+  1362→}) {
+  1363→  return (
+  1364→    <div className="pc-card p-3">
+  1365→      <div className="font-display text-2xl font-semibold" style={{ color }}>
+  1366→        {value}
+  1367→      </div>
+  1368→      <div className="text-xs text-muted mt-0.5">{label}</div>
+  1369→    </div>
+  1370→  );
+  1371→}
+  1372→
+  1373→// Keyboard shortcuts help overlay — press ? or click the help button.
+  1374→function ShortcutsHelp() {
+  1375→  const [open, setOpen] = useState(false);
+  1376→
+  1377→  useEffect(() => {
+  1378→    const handler = (e: KeyboardEvent) => {
+  1379→      const tag = (e.target as HTMLElement)?.tagName;
+  1380→      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  1381→      if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+  1382→        e.preventDefault();
+  1383→        setOpen((o) => !o);
+  1384→      } else if (e.key === "Escape") {
+  1385→        setOpen(false);
+  1386→      }
+  1387→    };
+  1388→    window.addEventListener("keydown", handler);
+  1389→    return () => window.removeEventListener("keydown", handler);
+  1390→  }, []);
+  1391→
+  1392→  const shortcuts = [
+  1393→    { keys: "Space / Enter", action: "Flip card / submit answer / continue" },
+  1394→    { keys: "1 2 3 4", action: "Grade Again / Hard / Good / Easy (passive)" },
+  1395→    { keys: "S", action: "Skip to next card" },
+  1396→    { keys: "P / ←", action: "Go to previous card" },
+  1397→    { keys: "→", action: "Go to next card (skip)" },
+  1398→    { keys: "Enter", action: "Submit typing or cloze answer" },
+  1399→    { keys: "Escape", action: "Exit session" },
+  1400→    { keys: "?", action: "Toggle this shortcuts overlay" },
+  1401→  ];
+  1402→
+  1403→  return (
+  1404→    <>
+  1405→      <button
+  1406→        onClick={() => setOpen(true)}
+  1407→        className="btn-secondary h-9 w-9 flex items-center justify-center"
+  1408→        aria-label="Keyboard shortcuts"
+  1409→        title="Keyboard shortcuts (press ?)"
+  1410→      >
+  1411→        <HelpCircle className="size-4" />
+  1412→      </button>
+  1413→      {open && (
+  1414→        <div
+  1415→          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+  1416→          onClick={() => setOpen(false)}
+  1417→        >
+  1418→          <div
+  1419→            className="pc-card-elevated p-6 max-w-md w-full mx-4"
+  1420→            onClick={(e) => e.stopPropagation()}
+  1421→          >
+  1422→            <div className="flex items-center justify-between mb-4">
+  1423→              <h3 className="font-display text-xl font-semibold flex items-center gap-2">
+  1424→                <Keyboard className="size-5 text-[var(--accent-primary)]" />
+  1425→                Keyboard Shortcuts
+  1426→              </h3>
+  1427→              <button
+  1428→                onClick={() => setOpen(false)}
+  1429→                className="text-muted hover:text-[var(--text-primary)] p-1"
+  1430→              >
+  1431→                <X className="size-4" />
+  1432→              </button>
+  1433→            </div>
+  1434→            <div className="space-y-2">
+  1435→              {shortcuts.map((s) => (
+  1436→                <div
+  1437→                  key={s.keys}
+  1438→                  className="flex items-center justify-between gap-4 py-2 border-b subtle-border last:border-0"
+  1439→                >
+  1440→                  <span className="text-sm text-secondary">{s.action}</span>
+  1441→                  <kbd className="font-mono text-xs px-2 py-1 rounded bg-elevated border surface-border text-[var(--text-primary)] whitespace-nowrap">
+  1442→                    {s.keys}
+  1443→                  </kbd>
+  1444→                </div>
+  1445→              ))}
+  1446→            </div>
+  1447→            <p className="text-xs text-muted mt-4 text-center">
+  1448→              Shortcuts are disabled while typing in an input field.
+  1449→            </p>
+  1450→          </div>
+  1451→        </div>
+  1452→      )}
+  1453→    </>
+  1454→  );
+  1455→}
+  1456→

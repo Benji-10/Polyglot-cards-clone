@@ -43,6 +43,15 @@ import {
 import { parseCloze, pickRandomExample, fieldValueToAnnotated } from "@/lib/ruby";
 import { speak, isTtsSupported } from "@/lib/tts";
 import { getLanguageBcp47, getLanguageFlag } from "@/lib/constants";
+import {
+  getAnswerLanguage,
+  getSpecialChars,
+} from "@/lib/diacritics";
+import {
+  DiacriticBar,
+  handleDiacriticKey,
+  insertAtCursor,
+} from "@/components/study/diacritic-bar";
 import type {
   CardData,
   BlueprintFieldDef,
@@ -761,6 +770,9 @@ function StudySession(props: {
           else next();
         } else if (flipped) {
           next();
+        } else if (props.interaction === "cloze" && !clozeData?.hasCloze) {
+          // No cloze sentence on this card — skip via Space too.
+          next();
         }
       } else if (["1", "2", "3", "4"].includes(e.key) && flipped && props.interaction === "passive") {
         e.preventDefault();
@@ -783,12 +795,40 @@ function StudySession(props: {
     return () => window.removeEventListener("keydown", handler);
   }, [flipped, props.interaction, props.index]);
 
+  // Insert a diacritic char at the cursor of the typing input.
+  // (Declared before the early-return so hooks always run in the same order.)
+  const insertTyping = useCallback(
+    (ch: string) => {
+      insertAtCursor(
+        typingInputRef.current,
+        ch,
+        typingAnswer,
+        setTypingAnswer
+      );
+    },
+    [typingAnswer]
+  );
+
+  // Insert a diacritic char at the cursor of the cloze input.
+  const insertCloze = useCallback(
+    (ch: string) => {
+      insertAtCursor(
+        clozeInputRef.current,
+        ch,
+        clozeAnswer,
+        setClozeAnswer
+      );
+    },
+    [clozeAnswer]
+  );
+
   if (!card) return null;
 
   const progress = ((props.index + 1) / props.cards.length) * 100;
   const isTargetFront = props.direction === "targetToSource";
 
-  // Front content for the card.
+  // Front content for the card (used by passive/typing/multiple modes — cloze
+  // mode renders its own front face content).
   const frontWord = isTargetFront
     ? card.word
     : getAnswer(card, "targetToSource", props.fields) || card.word;
@@ -796,28 +836,60 @@ function StudySession(props: {
     ? props.targetLanguage
     : props.sourceLanguage;
 
-  // Context chip / cloze preview for target→source front.
   const contextVal =
     typeof card.fields.context === "string" ? card.fields.context : "";
-  let clozePreview: { before: string; after: string; answer: string } | null = null;
-  if (isTargetFront && props.contextLanguage === "cloze" && exampleField) {
-    const fieldVal = card.fields[exampleField.key];
-    const ann = fieldValueToAnnotated(fieldVal);
-    const raw = ann?.text || (typeof fieldVal === "string" ? fieldVal : "");
-    if (raw) {
-      const parsed = parseCloze(pickRandomExample(raw));
-      if (parsed.hasCloze)
-        clozePreview = {
-          before: parsed.before,
-          after: parsed.after,
-          answer: parsed.answer,
-        };
+
+  // For typing mode, work out which field the answer comes from so we can
+  // exclude it from the "show on front" list (prevents leaking the answer).
+  const typingAnswerFieldKey = (() => {
+    if (props.interaction !== "typing") return undefined;
+    if (isTargetFront) {
+      return (
+        props.fields.find((f) => f.key === "source_translation") ||
+        props.fields.find((f) => f.key === "definition") ||
+        props.fields.find((f) => f.key === "reading") ||
+        props.fields[0]
+      )?.key;
     }
-  }
+    if (props.latinTyping && props.romanisationField) return props.romanisationField;
+    return undefined; // source→target default — answer is card.word, not a field
+  })();
 
   const frontShowField = props.fields.find(
-    (f) => f.showOnFront && f.key !== "context"
+    (f) =>
+      f.showOnFront &&
+      f.key !== "context" &&
+      f.key !== typingAnswerFieldKey
   );
+
+  // Compute the answer language for the diacritic bar.
+  //  - typing target→source → source language
+  //  - typing source→target (latinTyping+romanisationField) → target language
+  //    (which gives pinyin tones for Mandarin)
+  //  - typing source→target (default) → target language
+  //  - cloze → target language (the cloze sentence is in the target language)
+  const answerLanguage = props.interaction === "cloze"
+    ? props.targetLanguage
+    : getAnswerLanguage({
+        direction: props.direction,
+        targetLanguage: props.targetLanguage,
+        sourceLanguage: props.sourceLanguage,
+        latinTyping: props.latinTyping,
+        romanisationField: props.romanisationField,
+      });
+  const specialChars = getSpecialChars(answerLanguage);
+
+  // Hint shown above the cloze sentence on the card front.
+  const clozeHintField =
+    props.fields.find((f) => f.key === "source_translation") ||
+    props.fields.find((f) => f.key === "definition") ||
+    props.fields.find((f) => f.key === "reading");
+  const clozeHint = clozeHintField
+    ? fieldValueToAnnotated(card.fields[clozeHintField.key])?.text
+    : null;
+
+  // Cloze mode needs more vertical room (hint + sentence + diacritic bar).
+  const cardHeight = props.interaction === "cloze" ? 380 : 300;
 
   return (
     <div>
@@ -883,12 +955,17 @@ function StudySession(props: {
         <span className="pc-tag">
           {isTargetFront ? props.targetLanguage : props.sourceLanguage}
         </span>
+        {props.latinTyping && props.romanisationField && props.interaction === "typing" && !isTargetFront && (
+          <span className="pc-tag !bg-[var(--accent-glow)] !text-[var(--accent-primary)] !border-transparent">
+            Latin
+          </span>
+        )}
       </div>
 
       {/* 3D flip card */}
       <div
         className="card-3d w-full max-w-lg mx-auto"
-        style={{ height: 300 }}
+        style={{ height: cardHeight }}
       >
         <div
           className={cn("card-inner", flipped && "flipped")}
@@ -898,68 +975,128 @@ function StudySession(props: {
           style={{ cursor: props.interaction === "passive" && !flipped ? "pointer" : "default" }}
         >
           {/* FRONT */}
-          <div className="card-face pc-card-elevated rounded-2xl p-6 flex flex-col items-center justify-center text-center">
-            <div className="section-title mb-3">{frontLabel}</div>
-            <div
-              className={cn(
-                "text-5xl font-display font-semibold leading-tight",
-                containsCJK(frontWord) && "font-cjk"
-              )}
-            >
-              {frontWord}
-            </div>
-
-            {/* Cloze preview on the front (target→source, context_language='cloze') */}
-            {isTargetFront && clozePreview && (
-              <div className="mt-3 px-3 py-2 rounded-lg w-full bg-surface border surface-border">
-                <div className={cn("text-sm leading-relaxed text-secondary", containsCJK(clozePreview.before + clozePreview.after) && "font-cjk")}>
-                  {clozePreview.before}
-                  <span className="px-1.5 rounded font-medium bg-elevated text-muted">
-                    ___
-                  </span>
-                  {clozePreview.after}
+          <div className="card-face pc-card-elevated rounded-2xl p-6 flex flex-col items-center justify-center text-center relative overflow-y-auto scrollbar-thin">
+            {props.interaction === "cloze" && clozeData?.hasCloze ? (
+              /* CLOZE FRONT: hint + sentence with inline input + diacritic bar.
+                 The target word is NOT shown on the front (it would give the
+                 answer away). The card flips to reveal it on the back. */
+              <div className="w-full">
+                {clozeHint ? (
+                  <div className="mb-4 px-3 py-2 rounded-lg bg-surface border surface-border">
+                    <div className="section-title text-xs mb-1">
+                      {props.sourceLanguage}
+                    </div>
+                    <div
+                      className={cn(
+                        "text-base font-medium",
+                        containsCJK(clozeHint) && "font-cjk"
+                      )}
+                    >
+                      {clozeHint}
+                    </div>
+                    {contextVal && (
+                      <div className="text-xs text-muted mt-1">{contextVal}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="section-title mb-4">Complete the sentence</div>
+                )}
+                <div
+                  className={cn(
+                    "text-center leading-loose",
+                    containsCJK(clozeData.before + clozeData.after) && "font-cjk"
+                  )}
+                  style={{ fontSize: 22 }}
+                >
+                  {clozeData.before}
+                  <input
+                    ref={clozeInputRef}
+                    className="cloze-input"
+                    style={{
+                      width: `${Math.max((clozeData.answer?.length || 4) + 2, 4) * 1.1}em`,
+                      fontSize: "0.95em",
+                    }}
+                    value={clozeAnswer}
+                    onChange={(e) => setClozeAnswer(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        submitCloze();
+                        return;
+                      }
+                      if (handleDiacriticKey(e, specialChars, insertCloze)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    aria-label="Cloze answer"
+                  />
+                  {clozeData.after}
                 </div>
+                {specialChars.length > 0 && (
+                  <DiacriticBar chars={specialChars} onInsert={insertCloze} />
+                )}
               </div>
-            )}
-
-            {/* Context chip (target→source, context_language='target') */}
-            {isTargetFront && contextVal && !clozePreview && (
-              <div className="mt-3 px-3 py-1.5 rounded-lg bg-[var(--accent-glow)] border border-[var(--accent-primary)]/20">
-                <div className={cn("text-sm font-medium text-[var(--accent-primary)]", containsCJK(contextVal) && "font-cjk")}>
-                  {contextVal}
+            ) : props.interaction === "cloze" ? (
+              /* Cloze mode but no usable cloze sentence on this card. */
+              <div className="text-center text-sm text-muted px-4">
+                This card has no cloze sentence.
+                <br />
+                Press Space or Continue to skip.
+              </div>
+            ) : (
+              /* DEFAULT FRONT (passive / typing / multiple) */
+              <>
+                <div className="section-title mb-3">{frontLabel}</div>
+                <div
+                  className={cn(
+                    "text-5xl font-display font-semibold leading-tight",
+                    containsCJK(frontWord) && "font-cjk"
+                  )}
+                >
+                  {frontWord}
                 </div>
-              </div>
-            )}
 
-            {/* Show-on-front field (e.g. reading/phonetic) */}
-            {isTargetFront && frontShowField && card.fields[frontShowField.key] && (
-              <div className="mt-3 text-base text-secondary">
-                <RubyText
-                  value={card.fields[frontShowField.key]}
-                  phonetics={frontShowField.phonetics}
-                />
-              </div>
-            )}
+                {/* Context chip (target→source only) */}
+                {isTargetFront && contextVal && (
+                  <div className="mt-3 px-3 py-1.5 rounded-lg bg-[var(--accent-glow)] border border-[var(--accent-primary)]/20">
+                    <div className={cn("text-sm font-medium text-[var(--accent-primary)]", containsCJK(contextVal) && "font-cjk")}>
+                      {contextVal}
+                    </div>
+                  </div>
+                )}
 
-            {!flipped && props.interaction === "passive" && (
-              <div className="absolute bottom-4 text-xs text-muted">
-                tap to reveal · Space
-              </div>
-            )}
-            {props.ttsEnabled && isTtsSupported() && isTargetFront && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  speak(card.word, {
-                    lang: getLanguageBcp47(props.targetLanguage),
-                    rate: props.ttsRate,
-                  });
-                }}
-                className="absolute top-4 right-4 text-muted hover:text-[var(--accent-primary)] p-1"
-                aria-label="Pronounce word"
-              >
-                <Volume2 className="size-4" />
-              </button>
+                {/* Show-on-front field (e.g. reading/phonetic) — excludes the
+                    typing answer field so it can never leak the answer. */}
+                {isTargetFront && frontShowField && card.fields[frontShowField.key] && (
+                  <div className="mt-3 text-base text-secondary">
+                    <RubyText
+                      value={card.fields[frontShowField.key]}
+                      phonetics={frontShowField.phonetics}
+                    />
+                  </div>
+                )}
+
+                {!flipped && props.interaction === "passive" && (
+                  <div className="absolute bottom-4 text-xs text-muted">
+                    tap to reveal · Space
+                  </div>
+                )}
+                {props.ttsEnabled && isTtsSupported() && isTargetFront && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      speak(card.word, {
+                        lang: getLanguageBcp47(props.targetLanguage),
+                        rate: props.ttsRate,
+                      });
+                    }}
+                    className="absolute top-4 right-4 text-muted hover:text-[var(--accent-primary)] p-1"
+                    aria-label="Pronounce word"
+                  >
+                    <Volume2 className="size-4" />
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -1106,71 +1243,46 @@ function StudySession(props: {
               ref={typingInputRef}
               value={typingAnswer}
               onChange={(e) => setTypingAnswer(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitTyping()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitTyping();
+                  return;
+                }
+                if (handleDiacriticKey(e, specialChars, insertTyping)) {
+                  e.preventDefault();
+                }
+              }}
               placeholder="Your answer..."
               className={cn("bg-elevated border surface-border h-11 text-base", containsCJK(typingAnswer) && "font-cjk")}
             />
+            <DiacriticBar chars={specialChars} onInsert={insertTyping} />
             <Button className="btn-primary w-full h-10 mt-3 gap-2" onClick={submitTyping}>
               <Check className="size-4" /> Check
             </Button>
           </div>
         )}
 
-        {/* Cloze: inline input within the sentence (the key feature) */}
+        {/* Cloze: input is now on the card front, so we only need a Check
+            button below the card (plus a skip fallback when there's no
+            cloze sentence on the card). */}
         {!flipped && props.interaction === "cloze" && clozeData?.hasCloze && (
-          <div className="pc-card p-5">
-            {/* Hint: show the source translation + context */}
-            {(() => {
-              const hintField =
-                props.fields.find((f) => f.key === "source_translation") ||
-                props.fields.find((f) => f.key === "definition") ||
-                props.fields.find((f) => f.key === "reading");
-              const hint = hintField
-                ? fieldValueToAnnotated(card.fields[hintField.key])?.text
-                : null;
-              const ctx =
-                typeof card.fields.context === "string"
-                  ? card.fields.context
-                  : "";
-              return hint ? (
-                <div className="flex items-center justify-between mb-3">
-                  <div className="section-title">{props.sourceLanguage}</div>
-                  <div className="text-right">
-                    <div className={cn("text-base font-medium", containsCJK(hint) && "font-cjk")}>
-                      {hint}
-                    </div>
-                    {ctx && (
-                      <div className="text-xs text-muted mt-0.5">{ctx}</div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="section-title mb-3">Complete the sentence</div>
-              );
-            })()}
-            {/* The sentence with the inline input where the blank is */}
-            <div
-              className={cn(
-                "text-center leading-loose mb-4",
-                containsCJK(clozeData.before + clozeData.after) && "font-cjk"
-              )}
-              style={{ fontSize: 18 }}
+          <div className="text-center">
+            <Button
+              className="btn-primary h-11 px-8 gap-2"
+              onClick={submitCloze}
             >
-              {clozeData.before}
-              <input
-                ref={clozeInputRef}
-                className="cloze-input"
-                style={{
-                  width: `${Math.max((clozeData.answer?.length || 4) + 2, 4) * 0.95}em`,
-                }}
-                value={clozeAnswer}
-                onChange={(e) => setClozeAnswer(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submitCloze()}
-              />
-              {clozeData.after}
-            </div>
-            <Button className="btn-primary w-full h-10 gap-2" onClick={submitCloze}>
-              <Check className="size-4" /> Check
+              <Check className="size-4" /> Check · Enter
+            </Button>
+          </div>
+        )}
+        {!flipped && props.interaction === "cloze" && !clozeData?.hasCloze && (
+          <div className="text-center">
+            <Button
+              className="btn-secondary h-11 px-8 gap-2"
+              onClick={next}
+            >
+              <ArrowRight className="size-4" /> Skip · Space
             </Button>
           </div>
         )}
@@ -1392,6 +1504,7 @@ function ShortcutsHelp() {
   const shortcuts = [
     { keys: "Space / Enter", action: "Flip card / submit answer / continue" },
     { keys: "1 2 3 4", action: "Grade Again / Hard / Good / Easy (passive)" },
+    { keys: "1-9 0 (in input)", action: "Insert diacritic / special character (typing & cloze)" },
     { keys: "S", action: "Skip to next card" },
     { keys: "P / ←", action: "Go to previous card" },
     { keys: "→", action: "Go to next card (skip)" },
