@@ -49,6 +49,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: decks } = useDecks();
   const [createOpen, setCreateOpen] = useState(false);
 
+  const handleSignOut = () => {
+    console.log("[AppShell] signOut button clicked");
+    console.log("[AppShell] user before signOut:", user);
+    try {
+      signOut();
+      console.log("[AppShell] signOut() returned successfully");
+    } catch (e) {
+      console.error("[AppShell] signOut threw an error:", e);
+    }
+  };
+
   return (
     <div className="h-screen flex overflow-hidden bg-app text-[var(--text-primary)]">
       {/* Mobile overlay */}
@@ -190,7 +201,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* User footer */}
         <div className="border-t subtle-border p-3 shrink-0">
           <button
-            onClick={signOut}
+            onClick={handleSignOut}
             className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-elevated transition-colors group"
           >
             <div className="flex-1 text-left min-w-0">

@@ -61,13 +61,35 @@ export function useAuth(): AuthContextValue {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const isNetlify = isNetlifyIdentityConfigured();
+  const [isNetlify, setIsNetlify] = useState(false);
+
+  // Detect Netlify Identity availability. Re-checks when the widget script loads.
+  useEffect(() => {
+    const check = () => {
+      const detected =
+        !!process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL ||
+        (typeof window !== "undefined" &&
+          (window.location.hostname.includes("netlify") ||
+            !!window.netlifyIdentity));
+      setIsNetlify(detected);
+    };
+    check();
+    // Re-check after a delay in case the async script hasn't loaded yet.
+    const t = setTimeout(check, 500);
+    const t2 = setTimeout(check, 2000);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
+  }, []);
 
   // On mount: check for stored session, or auto-create a local guest.
   useEffect(() => {
     let active = true;
 
     const init = async () => {
+      console.log("[auth] init running, isNetlify =", isNetlify);
+
       // First check if the Netlify Identity widget has a logged-in user.
       if (isNetlify && typeof window !== "undefined") {
         // Wait for the widget script to load (it's async in the layout).
@@ -86,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
 
         const widget = await waitForWidget();
+        console.log("[auth] widget available:", !!widget);
         if (widget) {
           // Init the widget with the site URL.
           const siteUrl = process.env.NEXT_PUBLIC_NETLIFY_IDENTITY_URL || "";
@@ -99,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           // Check if user is already logged in.
           const widgetUser = widget.currentUser();
+          console.log("[auth] widget currentUser:", !!widgetUser);
           if (widgetUser) {
             const u: AuthUser = {
               id: widgetUser.id,
@@ -128,6 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               token?: { access_token?: string };
             } | null;
             if (!widgetUser) return;
+            console.log("[auth] widget login event:", widgetUser.email);
             const authUser: AuthUser = {
               id: widgetUser.id,
               email: widgetUser.email,
@@ -147,6 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
 
           const onLogout = () => {
+            console.log("[auth] widget logout event");
             storeAuthUser(null);
             localStorage.removeItem("polyglot_auth_token");
             if (active) {
@@ -157,20 +183,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           widget.on("login", onLogin);
           widget.on("logout", onLogout);
 
-          // On Netlify, DON'T fall through to stored guest — show the landing
-          // page so the user can sign in or continue as guest.
-          if (active) setLoading(false);
+          // On Netlify, if there's a stored REAL user (not guest), use it.
+          const stored = getStoredAuthUser();
+          if (stored && stored.netlifyId) {
+            console.log("[auth] found stored real Netlify user:", stored.email);
+            if (active) {
+              setUser(stored);
+              setLoading(false);
+            }
+            api.get("/api/auth/me").catch(() => {});
+            return;
+          }
+
+          // On Netlify, DON'T auto-use guests — show the landing page.
+          // Clear any auto-created guest from the initial false detection.
+          console.log("[auth] Netlify: no real user, showing landing page");
+          storeAuthUser(null);
+          if (active) {
+            setUser(null);
+            setLoading(false);
+          }
           return;
         }
       }
 
-      // On Netlify sites (widget not loaded yet or not available),
-      // check for a REAL auth user (not a guest) in localStorage.
+      // On Netlify sites (widget not loaded yet), check for a REAL auth user.
       if (isNetlify) {
         const existing = getStoredAuthUser();
-        // Only auto-login if the stored user is a real Netlify user (has netlifyId).
-        // Don't auto-use guests — let the user choose on the landing page.
         if (existing && existing.netlifyId) {
+          console.log("[auth] found stored real user (no widget yet):", existing.email);
           if (active) {
             setUser(existing);
             setLoading(false);
@@ -178,12 +219,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           api.get("/api/auth/me").catch(() => {});
           return;
         }
-        // No real user — show the landing page.
-        if (active) setLoading(false);
+        // No real user — show the landing page. Clear any stale guest.
+        console.log("[auth] Netlify: no real user, showing landing");
+        storeAuthUser(null);
+        if (active) {
+          setUser(null);
+          setLoading(false);
+        }
         return;
       }
 
       // Local dev: fall back to stored auth user or auto-create a guest.
+      console.log("[auth] local dev mode");
       const existing = getStoredAuthUser();
       if (existing) {
         if (active) {
@@ -232,23 +279,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(() => {
+    console.log("[auth] signOut called, isNetlify =", isNetlify);
     storeAuthUser(null);
     if (typeof window !== "undefined") {
       localStorage.removeItem("polyglot_auth_token");
-      // Also clear the local guest so it doesn't auto-login on next visit.
       localStorage.removeItem("polyglot_guest_user");
+      localStorage.removeItem("netlify-identity-user");
+      localStorage.removeItem("netlify-identity-token");
+      console.log("[auth] cleared localStorage");
     }
     if (typeof window !== "undefined" && window.netlifyIdentity) {
-      window.netlifyIdentity.logout();
+      console.log("[auth] calling netlifyIdentity.logout()");
+      try {
+        window.netlifyIdentity.logout();
+      } catch (e) {
+        console.error("[auth] netlifyIdentity.logout() threw:", e);
+      }
+    } else {
+      console.log("[auth] window.netlifyIdentity not available");
     }
     if (!isNetlify) {
-      // Local dev: immediately create a new guest so the app is usable.
       const guest = getOrCreateLocalGuest();
       storeAuthUser(guest);
       setUser(guest);
+      console.log("[auth] local dev: created new guest");
     } else {
-      // Netlify: show the landing page so the user can sign in again.
       setUser(null);
+      console.log("[auth] Netlify: set user to null, should show landing");
     }
   }, [isNetlify]);
 
